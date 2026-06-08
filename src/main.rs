@@ -155,7 +155,7 @@ async fn main() -> Result<()> {
                     continue;
                 }
             };
-            let pool_memory = match PoolMemoryStore::load("pool-memory.json") {
+            let mut pool_memory = match PoolMemoryStore::load("pool-memory.json") {
                 Ok(pm) => pm,
                 Err(e) => {
                     warn("mgmt", &format!("Failed to load pool memory: {}", e));
@@ -163,7 +163,7 @@ async fn main() -> Result<()> {
                 }
             };
 
-            match run_management_cycle(&config_mgmt, &llm_mgmt, &mut positions, &pool_memory, &wallet_mgmt).await {
+            match run_management_cycle(&config_mgmt, &llm_mgmt, &mut positions, &mut pool_memory, &wallet_mgmt).await {
                 Ok(result) => {
                     info("mgmt", &format!("Management cycle complete: {}", &result[..result.len().min(200)]));
                     if let Err(e) = positions.save(&mgmt_state_path) {
@@ -198,14 +198,14 @@ async fn main() -> Result<()> {
                 }
             }
 
-            let positions = match PositionState::load(&screen_state_path) {
+            let mut positions = match PositionState::load(&screen_state_path) {
                 Ok(p) => p,
                 Err(e) => {
                     warn("screen", &format!("Failed to load positions: {}", e));
                     continue;
                 }
             };
-            let pool_memory = match PoolMemoryStore::load("pool-memory.json") {
+            let mut pool_memory = match PoolMemoryStore::load("pool-memory.json") {
                 Ok(pm) => pm,
                 Err(e) => {
                     warn("screen", &format!("Failed to load pool memory: {}", e));
@@ -216,7 +216,7 @@ async fn main() -> Result<()> {
             // TODO: fetch wallet SOL balance from Helius
             let wallet_sol = 0.0f64;
 
-            match run_screening_cycle(&config_screen, &llm_screen, &positions, &pool_memory, wallet_sol).await {
+            match run_screening_cycle(&config_screen, &llm_screen, &mut positions, &mut pool_memory, wallet_sol, &wallet_screen).await {
                 Ok(result) => {
                     info("screen", &format!("Screening cycle complete: {}", &result[..result.len().min(200)]));
                 }

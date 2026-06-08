@@ -187,6 +187,76 @@ pub fn get_all_tool_definitions() -> Vec<ToolDefinition> {
                 "required": []
             }),
         ),
+        tool(
+            "add_liquidity",
+            "Add more liquidity to an existing position (increase size)",
+            json!({
+                "type": "object",
+                "properties": {
+                    "position_id": {"type": "string", "description": "Position ID to add liquidity to"},
+                    "amount_sol": {"type": "number", "description": "Amount of SOL to add"}
+                },
+                "required": ["position_id", "amount_sol"]
+            }),
+        ),
+        tool(
+            "withdraw_liquidity",
+            "Partially withdraw liquidity from a position (reduce size or harvest)",
+            json!({
+                "type": "object",
+                "properties": {
+                    "position_id": {"type": "string", "description": "Position ID to withdraw from"},
+                    "pct": {"type": "number", "description": "Percentage to withdraw (0-100)"}
+                },
+                "required": ["position_id", "pct"]
+            }),
+        ),
+        tool(
+            "update_config",
+            "Update a bot configuration parameter at runtime. Self-tuning.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "Config key (e.g. 'screening.minOrganic', 'risk.maxDeployAmount')"},
+                    "value": {"description": "New value (auto-coerced to correct type)"}
+                },
+                "required": ["key", "value"]
+            }),
+        ),
+        tool(
+            "blacklist_token",
+            "Blacklist a token mint to prevent future deploys",
+            json!({
+                "type": "object",
+                "properties": {
+                    "mint": {"type": "string"},
+                    "reason": {"type": "string"}
+                },
+                "required": ["mint"]
+            }),
+        ),
+        tool(
+            "unblock_dev",
+            "Remove a developer wallet from the dev blocklist",
+            json!({
+                "type": "object",
+                "properties": {
+                    "wallet": {"type": "string"}
+                },
+                "required": ["wallet"]
+            }),
+        ),
+        tool(
+            "get_wallet_positions",
+            "Fetch DLMM positions for any wallet (competitive analysis)",
+            json!({
+                "type": "object",
+                "properties": {
+                    "wallet": {"type": "string", "description": "Wallet address to query"}
+                },
+                "required": []
+            }),
+        ),
     ]
 }
 

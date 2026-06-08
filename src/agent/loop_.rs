@@ -34,8 +34,9 @@ impl AgentLoop {
         role: AgentRole,
         config: &Config,
         llm: &LlmClient,
-        positions: &PositionState,
-        pool_memory: &PoolMemoryStore,
+        positions: &mut PositionState,
+        pool_memory: &mut PoolMemoryStore,
+        wallet_address: &str,
     ) -> Result<String> {
         info(
             "agent",
@@ -67,7 +68,7 @@ impl AgentLoop {
         let tool_names = get_tools_for_role(&role, goal);
         let tool_defs = build_tool_definitions(&tool_names);
 
-        let mut executor = ToolExecutor::new();
+        let mut executor = ToolExecutor::new(wallet_address);
         let mut messages: Vec<ChatMessage> = vec![
             ChatMessage {
                 role: "system".to_string(),
