@@ -22,7 +22,7 @@ mod tools;
 mod utils;
 
 use config::llm_config::LlmCredentials;
-use config::{load_config, load_env_files, meridian_data_path};
+use config::{load_env_files, meridian_data_path, vps_config};
 use cycle::{
     queue_pnl_exit_close_instructions, run_management_cycle, run_pnl_poll, run_screening_cycle,
 };
@@ -120,7 +120,7 @@ async fn main() -> Result<()> {
             _ => {}
         }
         load_env_files();
-        let config = load_config(None)?;
+        let config = vps_config();
         let state_path = std::env::var("MERIDIAN_STATE_PATH").unwrap_or_else(|_| {
             meridian_data_path("meridian-state.json")
                 .to_string_lossy()
@@ -144,8 +144,8 @@ async fn main() -> Result<()> {
     );
     info("main", "================================================");
 
-    let config = load_config(None)?;
-    info("main", "Config loaded");
+    let config = vps_config();
+    info("main", "Config loaded (hardcoded VPS defaults)");
 
     let creds = LlmCredentials::from_env_or_config(
         Some(&config.llm.base_url),
