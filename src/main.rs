@@ -37,15 +37,6 @@ enum ReplCommandOutcome {
     Exit,
 }
 
-fn health_response() -> String {
-    let body = r#"{"status":"ok","version":"0.2.0"}"#;
-    format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        body.len(),
-        body
-    )
-}
-
 async fn run_repl_command(
     line: &str,
     config: &config::Config,
@@ -164,10 +155,6 @@ async fn main() -> Result<()> {
     let pool_memory_path = meridian_data_path("pool-memory.json")
         .to_string_lossy()
         .into_owned();
-    let health_port: u16 = std::env::var("HEALTH_PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(8080);
     let lock_path = std::env::var("MERIDIAN_LOCK_PATH")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| meridian_data_path("meridian.lock"));
@@ -185,15 +172,6 @@ async fn main() -> Result<()> {
             ops::StartupCheckStatus::Warn => warn("startup", &check.message),
         }
     }
-    for check in [
-        ops::check_port_available("health_port", &format!("0.0.0.0:{health_port}")),
-    ] {
-        match check.status {
-            ops::StartupCheckStatus::Ok => info("startup", &check.message),
-            ops::StartupCheckStatus::Warn => warn("startup", &check.message),
-        }
-    }
-
     let positions = PositionState::load(&state_path)?;
     PoolMemoryStore::load(&pool_memory_path)?;
     info(
@@ -503,38 +481,6 @@ async fn main() -> Result<()> {
         }
     });
 
-    // ── Health check endpoint (TCP listener) ───────────────────
-    let mut shutdown_health = shutdown_rx.clone();
-
-    tokio::spawn(async move {
-        let addr = std::net::SocketAddr::from(([0, 0, 0, 0], health_port));
-        let listener = match tokio::net::TcpListener::bind(addr).await {
-            Ok(l) => l,
-            Err(e) => {
-                warn("health", &format!("Health bind failed: {}", e));
-                return;
-            }
-        };
-        info("health", &format!("Health check on :{}", health_port));
-
-        loop {
-            tokio::select! {
-                accept = listener.accept() => {
-                    if let Ok((mut stream, _)) = accept {
-                        let resp = health_response();
-                        use tokio::io::AsyncWriteExt;
-                        let _ = stream.write_all(resp.as_bytes()).await;
-                        let _ = stream.shutdown().await;
-                    }
-                }
-                _ = shutdown_health.changed() => {
-                    info("health", "Health check shutting down");
-                    break;
-                }
-            }
-        }
-    });
-
     // ── REPL (interactive mode) ────────────────────────────────
     let is_tty = atty::is(atty::Stream::Stdin);
     if is_tty {
@@ -665,12 +611,4 @@ mod repl_tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    #[test]
-    fn health_response_has_content_length_for_clean_curl_smoke() {
-        let response = health_response();
-
-        assert!(response.starts_with("HTTP/1.1 200 OK"));
-        assert!(response.contains("Content-Length: 33"));
-        assert!(response.ends_with(r#"{"status":"ok","version":"0.2.0"}"#));
-    }
 }
