@@ -69,7 +69,7 @@ Reference target: [`yunus-0x/meridian`](https://github.com/yunus-0x/meridian)
 - [x] Darwin signal weighting and threshold evolution
 - [x] Strategy library with active strategy presets
 - [x] Study top LPers / behavior-pattern analysis
-- [ ] Pool memory cooldown logic matching original behavior
+- [x] Pool memory cooldown logic matching original behavior
 
 ### Phase 5 — Screening enrichment parity
 

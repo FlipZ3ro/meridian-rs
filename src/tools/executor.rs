@@ -597,9 +597,9 @@ impl ToolExecutor {
                     if let Some(pnl) = pos.pnl_sol {
                         if pnl < 0.0 {
                             // Cooldown pool for 1 hour
-                            pool_memory.set_cooldown(&pos.pool_address, "loss_close", 60);
+                            pool_memory.set_pool_cooldown(&pos.pool_address, "loss_close", 60);
                             // Cooldown token too
-                            pool_memory.set_cooldown(&pos.base_mint, "loss_close", 60);
+                            pool_memory.set_base_mint_cooldown_minutes(&pos.base_mint, 60, "loss_close");
                             info(
                                 "executor",
                                 &format!("Set 1h cooldown on pool/token after {:.4} SOL loss", pnl),
@@ -1213,6 +1213,40 @@ mod tests {
             total_usd: 0.0,
             error: None,
         }
+    }
+
+    #[tokio::test]
+    async fn close_post_effects_set_distinct_pool_and_token_cooldowns_on_loss() {
+        let executor = ToolExecutor::new("wallet");
+        let config = Config::default();
+        let mut positions = PositionState::default();
+        let mut pool_memory = PoolMemoryStore::default();
+
+        let position = TrackedPosition {
+            id: "pos-loss".to_string(),
+            pool_address: "PoolLoss111".to_string(),
+            base_mint: "MintLoss111".to_string(),
+            base_symbol: Some("LOSS".to_string()),
+            pnl_sol: Some(-0.25),
+            ..TrackedPosition::default()
+        };
+        positions.positions.insert(position.id.clone(), position);
+        pool_memory.add_note("PoolLoss111", "MintLoss111", Some("LOSS"), "seed");
+
+        executor
+            .run_post_effects(
+                "close_position",
+                &json!({"position_id": "pos-loss"}),
+                r#"{"success":true}"#,
+                &config,
+                &mut positions,
+                &mut pool_memory,
+            )
+            .await
+            .expect("post effects should succeed");
+
+        assert!(pool_memory.is_pool_on_cooldown("PoolLoss111"));
+        assert!(pool_memory.is_base_mint_on_cooldown("MintLoss111"));
     }
 
     #[test]

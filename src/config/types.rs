@@ -93,6 +93,20 @@ pub struct ManagementConfig {
     pub position_size_pct: f64,
     pub min_sol_to_open: f64,
     pub out_of_range_wait_minutes: u32,
+    #[serde(default = "default_oor_cooldown_trigger_count")]
+    pub oor_cooldown_trigger_count: u32,
+    #[serde(default = "default_oor_cooldown_hours")]
+    pub oor_cooldown_hours: u32,
+    #[serde(default = "default_repeat_deploy_cooldown_enabled")]
+    pub repeat_deploy_cooldown_enabled: bool,
+    #[serde(default = "default_repeat_deploy_cooldown_trigger_count")]
+    pub repeat_deploy_cooldown_trigger_count: u32,
+    #[serde(default = "default_repeat_deploy_cooldown_hours")]
+    pub repeat_deploy_cooldown_hours: u32,
+    #[serde(default = "default_repeat_deploy_cooldown_scope")]
+    pub repeat_deploy_cooldown_scope: String,
+    #[serde(default)]
+    pub repeat_deploy_cooldown_min_fee_earned_pct: f64,
     pub take_profit_pct: Option<f64>,
     #[serde(default = "default_management_interval")]
     pub management_interval_min: u32,
@@ -125,6 +139,24 @@ fn default_management_interval() -> u32 {
 }
 fn default_screening_interval() -> u32 {
     30
+}
+fn default_oor_cooldown_trigger_count() -> u32 {
+    3
+}
+fn default_oor_cooldown_hours() -> u32 {
+    12
+}
+fn default_repeat_deploy_cooldown_enabled() -> bool {
+    true
+}
+fn default_repeat_deploy_cooldown_trigger_count() -> u32 {
+    3
+}
+fn default_repeat_deploy_cooldown_hours() -> u32 {
+    12
+}
+fn default_repeat_deploy_cooldown_scope() -> String {
+    "token".to_string()
 }
 fn default_trailing_trigger_pct() -> f64 {
     5.0
@@ -410,6 +442,13 @@ impl Default for Config {
                 position_size_pct: 0.35,
                 min_sol_to_open: 0.55,
                 out_of_range_wait_minutes: 30,
+                oor_cooldown_trigger_count: 3,
+                oor_cooldown_hours: 12,
+                repeat_deploy_cooldown_enabled: true,
+                repeat_deploy_cooldown_trigger_count: 3,
+                repeat_deploy_cooldown_hours: 12,
+                repeat_deploy_cooldown_scope: "token".to_string(),
+                repeat_deploy_cooldown_min_fee_earned_pct: 0.0,
                 take_profit_pct: None,
                 management_interval_min: 10,
                 screening_interval_min: 30,

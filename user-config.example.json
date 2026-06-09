@@ -23,6 +23,13 @@
     "positionSizePct": 0.35,
     "minSolToOpen": 0.55,
     "outOfRangeWaitMinutes": 30,
+    "oorCooldownTriggerCount": 3,
+    "oorCooldownHours": 12,
+    "repeatDeployCooldownEnabled": true,
+    "repeatDeployCooldownTriggerCount": 3,
+    "repeatDeployCooldownHours": 12,
+    "repeatDeployCooldownScope": "token",
+    "repeatDeployCooldownMinFeeEarnedPct": 0,
     "takeProfitPct": null
   },
   "risk": {

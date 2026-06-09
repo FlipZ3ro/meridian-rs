@@ -185,6 +185,41 @@ fn config_from_flat_js_value(value: &Value) -> Config {
         "outOfRangeWaitMinutes",
         &mut config.management.out_of_range_wait_minutes,
     );
+    set_u32(
+        obj,
+        "oorCooldownTriggerCount",
+        &mut config.management.oor_cooldown_trigger_count,
+    );
+    set_u32(
+        obj,
+        "oorCooldownHours",
+        &mut config.management.oor_cooldown_hours,
+    );
+    set_bool(
+        obj,
+        "repeatDeployCooldownEnabled",
+        &mut config.management.repeat_deploy_cooldown_enabled,
+    );
+    set_u32(
+        obj,
+        "repeatDeployCooldownTriggerCount",
+        &mut config.management.repeat_deploy_cooldown_trigger_count,
+    );
+    set_u32(
+        obj,
+        "repeatDeployCooldownHours",
+        &mut config.management.repeat_deploy_cooldown_hours,
+    );
+    set_string(
+        obj,
+        "repeatDeployCooldownScope",
+        &mut config.management.repeat_deploy_cooldown_scope,
+    );
+    set_f64(
+        obj,
+        "repeatDeployCooldownMinFeeEarnedPct",
+        &mut config.management.repeat_deploy_cooldown_min_fee_earned_pct,
+    );
     set_opt_f64(obj, "takeProfitPct", &mut config.management.take_profit_pct);
     set_u32(
         obj,
@@ -673,6 +708,13 @@ mod tests {
           "takeProfitPct": 5,
           "minFeePerTvl24h": 7,
           "minAgeBeforeYieldCheck": 60,
+          "oorCooldownTriggerCount": 2,
+          "oorCooldownHours": 8,
+          "repeatDeployCooldownEnabled": true,
+          "repeatDeployCooldownTriggerCount": 4,
+          "repeatDeployCooldownHours": 9,
+          "repeatDeployCooldownScope": "both",
+          "repeatDeployCooldownMinFeeEarnedPct": 0.25,
           "trailingTakeProfit": true,
           "trailingTriggerPct": 3,
           "trailingDropPct": 1.5,
@@ -718,6 +760,17 @@ mod tests {
         assert_eq!(config.llm.management_model, "minimax/minimax-m2.5");
         assert_eq!(config.llm.screening_model, "minimax/minimax-m2.5");
         assert_eq!(config.llm.general_model, "minimax/minimax-m2.7");
+        assert_eq!(config.management.min_age_before_yield_check, 60);
+        assert_eq!(config.management.oor_cooldown_trigger_count, 2);
+        assert_eq!(config.management.oor_cooldown_hours, 8);
+        assert!(config.management.repeat_deploy_cooldown_enabled);
+        assert_eq!(config.management.repeat_deploy_cooldown_trigger_count, 4);
+        assert_eq!(config.management.repeat_deploy_cooldown_hours, 9);
+        assert_eq!(config.management.repeat_deploy_cooldown_scope, "both");
+        assert_eq!(
+            config.management.repeat_deploy_cooldown_min_fee_earned_pct,
+            0.25
+        );
         assert!(config.darwin.enabled);
         assert_eq!(config.darwin.window_days, 30);
         assert_eq!(config.darwin.recalc_every, 4);
