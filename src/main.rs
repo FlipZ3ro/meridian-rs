@@ -28,6 +28,68 @@ use state::pool_memory::PoolMemoryStore;
 use state::positions::PositionState;
 use utils::logger::module::{info, warn};
 
+#[derive(Debug, PartialEq, Eq)]
+enum ReplCommandOutcome {
+    Continue(Option<String>),
+    Exit,
+}
+
+async fn run_repl_command(
+    line: &str,
+    config: &config::Config,
+    state_path: &str,
+    wallet_address: &str,
+) -> Result<ReplCommandOutcome> {
+    match line.trim() {
+        "quit" | "exit" | "q" => Ok(ReplCommandOutcome::Exit),
+        "help" | "h" => Ok(ReplCommandOutcome::Continue(Some(
+            [
+                "Commands:",
+                "  status    — Show position state summary",
+                "  screen    — Run screening cycle now",
+                "  manage    — Run management cycle now",
+                "  quit/exit — Graceful shutdown",
+            ]
+            .join("\n"),
+        ))),
+        "status" | "s" => {
+            let positions = PositionState::load(state_path).unwrap_or_default();
+            Ok(ReplCommandOutcome::Continue(Some(
+                positions.get_state_summary(),
+            )))
+        }
+        "screen" => {
+            info("main", "Manual screening triggered");
+            let output = cli::run_cli_command(
+                cli::CliCommand::Screen {
+                    wallet: Some(wallet_address.to_string()),
+                    wallet_sol: None,
+                },
+                config,
+                state_path,
+            )
+            .await?;
+            Ok(ReplCommandOutcome::Continue(Some(output.render()?)))
+        }
+        "manage" | "m" => {
+            info("main", "Manual management triggered");
+            let output = cli::run_cli_command(
+                cli::CliCommand::Manage {
+                    wallet: Some(wallet_address.to_string()),
+                },
+                config,
+                state_path,
+            )
+            .await?;
+            Ok(ReplCommandOutcome::Continue(Some(output.render()?)))
+        }
+        "" => Ok(ReplCommandOutcome::Continue(None)),
+        other => Ok(ReplCommandOutcome::Continue(Some(format!(
+            "Unknown command: {other}. Type 'help' for commands."
+        )))),
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -499,34 +561,19 @@ async fn main() -> Result<()> {
                     input.trim().to_string()
                 }) => {
                     let line = line.unwrap_or_default();
-                    match line.as_str() {
-                        "quit" | "exit" | "q" => {
+                    match run_repl_command(&line, &config, &state_path, &wallet_address).await {
+                        Ok(ReplCommandOutcome::Exit) => {
                             info("main", "Exiting...");
                             let _ = shutdown_tx.send(true);
                             break;
                         }
-                        "help" | "h" => {
-                            println!("Commands:");
-                            println!("  status    — Show position state summary");
-                            println!("  screen    — Run screening cycle now");
-                            println!("  manage    — Run management cycle now");
-                            println!("  quit/exit — Graceful shutdown");
+                        Ok(ReplCommandOutcome::Continue(Some(output))) => {
+                            println!("{}", output);
                         }
-                        "status" | "s" => {
-                            let positions = PositionState::load(&state_path).unwrap_or_default();
-                            println!("{}", positions.get_state_summary());
-                        }
-                        "screen" => {
-                            info("main", "Manual screening triggered");
-                            // Would run screening cycle
-                        }
-                        "manage" | "m" => {
-                            info("main", "Manual management triggered");
-                            // Would run management cycle
-                        }
-                        "" => {}
-                        _ => {
-                            println!("Unknown command: {}. Type 'help' for commands.", line);
+                        Ok(ReplCommandOutcome::Continue(None)) => {}
+                        Err(e) => {
+                            warn("main", &format!("Manual command failed: {}", e));
+                            println!("Manual command failed: {}", e);
                         }
                     }
                 }
@@ -549,4 +596,77 @@ async fn main() -> Result<()> {
     info("main", "Meridian RS shutdown complete. Goodbye! 🧙");
 
     Ok(())
+}
+
+#[cfg(test)]
+mod repl_tests {
+    use super::*;
+    use crate::config::Config;
+
+    fn unique_test_dir(label: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time should move forward")
+            .as_nanos();
+        std::env::temp_dir().join(format!("meridian-rs-repl-{}-{}", label, nanos))
+    }
+
+    #[tokio::test]
+    async fn repl_screen_command_runs_real_one_shot_screen_cycle() {
+        let dir = unique_test_dir("screen");
+        std::fs::create_dir_all(&dir).expect("test dir should be created");
+        let state_path = dir.join("meridian-state.json");
+        let config = Config::default();
+
+        let outcome = run_repl_command(
+            "screen",
+            &config,
+            state_path.to_str().expect("state path should be utf8"),
+            "",
+        )
+        .await
+        .expect("manual screen should run without network when wallet is empty");
+
+        let ReplCommandOutcome::Continue(Some(output)) = outcome else {
+            panic!("screen should print JSON output and continue");
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&output).expect("valid JSON output");
+        assert_eq!(parsed["success"], true);
+        assert_eq!(parsed["command"], "screen");
+        assert!(parsed["data"]["result"]
+            .as_str()
+            .expect("screen result should be present")
+            .contains("Not enough SOL"));
+        assert!(!output.contains("Would run screening cycle"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn repl_manage_command_runs_real_one_shot_management_cycle() {
+        let dir = unique_test_dir("manage");
+        std::fs::create_dir_all(&dir).expect("test dir should be created");
+        let state_path = dir.join("meridian-state.json");
+        let config = Config::default();
+
+        let outcome = run_repl_command(
+            "manage",
+            &config,
+            state_path.to_str().expect("state path should be utf8"),
+            "Wallet111",
+        )
+        .await
+        .expect("manual manage should run against empty local state");
+
+        let ReplCommandOutcome::Continue(Some(output)) = outcome else {
+            panic!("manage should print JSON output and continue");
+        };
+        let parsed: serde_json::Value = serde_json::from_str(&output).expect("valid JSON output");
+        assert_eq!(parsed["success"], true);
+        assert_eq!(parsed["command"], "manage");
+        assert_eq!(parsed["data"]["result"], "No active positions.");
+        assert!(!output.contains("Would run management cycle"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }

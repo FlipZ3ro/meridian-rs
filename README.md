@@ -100,6 +100,11 @@ Reference target: [`yunus-0x/meridian`](https://github.com/yunus-0x/meridian)
 - [x] Claude Code slash-command compatibility or Rust-native replacement
 - [x] HiveMind/shared lessons support or documented replacement
 
+### Phase 8 — Runtime operator polish
+
+- [x] Interactive REPL `screen`/`manage` commands execute the real one-shot cycles and print JSON output
+- [ ] PnL poller exit signals dispatch or queue close actions through the guarded close flow
+
 ## Project Structure
 
 ```
@@ -139,7 +144,7 @@ cargo run -- close --position <position> --reason "low yield" --skip-swap
 cargo run -- swap --from <mint> --amount <tokens>
 ```
 
-Omitting a subcommand starts the long-running agent runtime; passing a subcommand prints JSON output and exits.
+Omitting a subcommand starts the long-running agent runtime; passing a subcommand prints JSON output and exits. In an interactive terminal, the runtime REPL supports `status`, `screen`, `manage`, and `quit`; manual `screen`/`manage` commands execute the same Rust one-shot cycle handlers and print their JSON envelopes.
 
 ## Config
 
