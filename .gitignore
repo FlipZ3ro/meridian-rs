@@ -1,27 +1,15 @@
-# Build
-/target
-**/*.rs.bk
-Cargo.lock
-
-# Config (sensitive)
-user-config.json
+node_modules/
+.next/
+out/
 .env
 .env.*
 !.env.example
+.env.local
 
-# OS
-.DS_Store
-Thumbs.db
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# Logs
-logs/
-*.log
-
-# Reference (original JS code)
-reference/
+backend/target/
+backend/.env
+backend/.env.*
+!backend/.env.example
+backend/.meridian/
+backend/backend.log
+backend/backend.err.log

@@ -1,0 +1,30 @@
+{
+  "name": "meridian-dashboard",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "dev:all": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev-all.ps1",
+    "build": "next build",
+    "build:backend": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-backend.ps1",
+    "build:all": "npm run build:backend && npm run build",
+    "backend:dev": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-backend.ps1",
+    "start": "next start"
+  },
+  "dependencies": {
+    "framer-motion": "^12.0.0",
+    "lucide-react": "^0.500.0",
+    "next": "^16.2.7",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "zustand": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "typescript": "^5.6.0"
+  },
+  "overrides": {
+    "postcss": "^8.5.10"
+  }
+}

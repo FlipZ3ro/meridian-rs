@@ -1,0 +1,42 @@
+[package]
+name = "meridian-rs"
+version = "0.2.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+openssl = { version = "0.10", features = ["vendored"] }
+bs58 = "0.5"
+base64 = "0.22"
+bincode = "1"
+reqwest = { version = "0.12", features = ["json"] }
+dotenvy = "0.15"
+chrono = "0.4"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# Solana
+solana-sdk = "2"
+solana-client = "2"
+solana-sdk-v3 = { package = "solana-sdk", version = "3.0.0" }
+solana-client-v3 = { package = "solana-client", version = "3.1.14" }
+
+# Meteora native SDK adapter
+wp-solana-core = { version = "0.1.1", default-features = false, features = ["rpc", "legacy-wsol-shell"] }
+wp-solana-meteora-dlmm-client = "0.1.1"
+wp-solana-meteora-dlmm-core = "0.1.1"
+wp-solana-meteora-dlmm-sdk = "0.1.1"
+wp-solana-rpc = "0.1.1"
+
+# Web Framework
+axum = "0.7"
+tower-http = { version = "0.5", features = ["cors"] }
+
+# Regex for intent matching
+regex = "1"
+urlencoding = "2"
+hyper = { version = "1.10.1", features = ["full"] }
+atty = "0.2.14"
