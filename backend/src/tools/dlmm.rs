@@ -145,6 +145,12 @@ pub struct PositionPnlData {
     pub pool_active_bin_id: Option<i32>,
     pub is_out_of_range: Option<bool>,
     #[serde(default, deserialize_with = "de_opt_f64")]
+    pub min_price: Option<f64>,
+    #[serde(default, deserialize_with = "de_opt_f64")]
+    pub max_price: Option<f64>,
+    #[serde(default, deserialize_with = "de_opt_f64")]
+    pub pool_active_price: Option<f64>,
+    #[serde(default, deserialize_with = "de_opt_f64")]
     pub pnl_usd: Option<f64>,
     #[serde(default, deserialize_with = "de_opt_f64")]
     pub pnl_sol: Option<f64>,
@@ -516,6 +522,12 @@ pub struct PositionPnlResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_bin: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_price: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_price: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_price: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub age_minutes: Option<i64>,
 }
 
@@ -866,6 +878,9 @@ pub async fn get_position_pnl(
         lower_bin: pos.lower_bin_id,
         upper_bin: pos.upper_bin_id,
         active_bin: pos.pool_active_bin_id,
+        min_price: pos.min_price,
+        max_price: pos.max_price,
+        active_price: pos.pool_active_price,
         age_minutes,
     })
 }

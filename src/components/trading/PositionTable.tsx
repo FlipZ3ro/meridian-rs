@@ -24,6 +24,11 @@ type BackendPosition = {
   live_pnl_usd?: number;
   live_pnl_pct?: number;
   live_value_usd?: number;
+  price_min?: number;
+  price_max?: number;
+  price_active?: number;
+  fee_apr_pct?: number;
+  in_range?: boolean;
   pnl_sol?: number | null;
   signal_snapshot?: {
     priceRange?: { min?: number; max?: number } | null;
@@ -59,6 +64,8 @@ type PositionRow = {
   pnlPositive: boolean;
   status: string;
   age: string;
+  markerPct: number | null;
+  inRange: boolean;
 };
 
 const fallbackPositions: PositionRow[] = [];
@@ -90,6 +97,28 @@ const formatPrice = (value: number) => {
   if (value >= 1) return value.toFixed(2);
   if (value >= 0.001) return value.toFixed(5);
   return value.toExponential(2);
+};
+
+const SUBSCRIPT_DIGITS = ['₀', '₁', '₂', '₃', '₄', '₅', '₆', '₇', '₈', '₉'];
+const toSubscript = (n: number) => String(n).split('').map((d) => SUBSCRIPT_DIGITS[Number(d)]).join('');
+
+// Meteora-style price formatting: tiny numbers collapse leading zeros into a
+// subscript count, e.g. 0.0000141 -> "0.0₄141".
+const formatSubPrice = (value: number) => {
+  if (!Number.isFinite(value) || value <= 0) return '-';
+  if (value >= 1) return value.toPrecision(4).replace(/\.?0+$/, '');
+  if (value >= 0.001) return value.toFixed(4);
+  const fixed = value.toFixed(20);
+  const match = fixed.match(/^0\.(0*)(\d+)/);
+  if (!match) return value.toExponential(2);
+  const zeros = match[1].length;
+  const sig = match[2].replace(/0+$/, '').slice(0, 3) || '0';
+  return `0.0${toSubscript(zeros)}${sig}`;
+};
+
+const formatPriceRange = (min?: number, max?: number) => {
+  if (!Number.isFinite(min as number) || !Number.isFinite(max as number)) return null;
+  return `${formatSubPrice(min as number)} - ${formatSubPrice(max as number)}`;
 };
 
 const formatRange = (lower: number | undefined, upper: number | undefined, tokenUsd: number, solUsd: number) => {
@@ -146,10 +175,23 @@ const mapPosition = (position: BackendPosition, pricing: PricingContext): Positi
   const feesUsd = feeSolUsd + feeTokenUsd;
   const symbol = position.base_symbol ?? position.pool_name ?? 'TOKEN';
 
+  // Real price range (Meteora subscript style) + active-price marker position.
+  const liveRange = formatPriceRange(position.price_min, position.price_max);
+  const pMin = Number(position.price_min);
+  const pMax = Number(position.price_max);
+  const pActive = Number(position.price_active);
+  const markerPct = (Number.isFinite(pMin) && Number.isFinite(pMax) && Number.isFinite(pActive) && pMax > pMin)
+    ? Math.min(100, Math.max(0, ((pActive - pMin) / (pMax - pMin)) * 100))
+    : null;
+  // Fee badge: prefer the 24h fee/TVL APR (what Meteora shows) over a raw ratio.
+  const feeApr = position.fee_apr_pct !== undefined
+    ? Number(position.fee_apr_pct)
+    : (liquidityUsd > 0 ? (feesUsd / liquidityUsd) * 100 : 0);
+
   return {
     key: position.id ?? position.pool_name ?? Math.random().toString(36),
     pair: symbol,
-    range: rangeFromSnapshot(position) ?? formatRange(position.lower_bin, position.upper_bin, tokenUsd, solUsd),
+    range: liveRange ?? rangeFromSnapshot(position) ?? formatRange(position.lower_bin, position.upper_bin, tokenUsd, solUsd),
     quote: `SOL per ${symbol}`,
     liquidityUsd: formatUsd(liquidityUsd),
     liquidityPrimary: `${solLeg.toFixed(4)} SOL (${formatUsd(solLegUsd)})`,
@@ -161,12 +203,14 @@ const mapPosition = (position: BackendPosition, pricing: PricingContext): Positi
     feesSecondary: tokenUsd > 0
       ? `${formatTokenAmount(feeTokenLeg)} ${symbol} (${formatUsd(feeTokenUsd)})`
       : `${formatTokenAmount(feeTokenLeg)} ${symbol}`,
-    feesApr: `${Math.min(99.99, Math.max(0, liquidityUsd > 0 ? (feesUsd / liquidityUsd) * 100 : 0)).toFixed(2)}%`,
+    feesApr: `${Math.max(0, feeApr).toFixed(2)}%`,
     pnlUsd: `${pnlUsd >= 0 ? '+' : '-'}${formatUsd(pnlUsd)}`,
     pnlPct: `${pnlPct >= 0 ? '+' : '-'}${Math.abs(pnlPct).toFixed(2)}%`,
     pnlPositive: pnlUsd >= 0,
     status: String(position.status ?? 'active').toUpperCase(),
     age: formatAge(position.created_at),
+    markerPct,
+    inRange: position.in_range ?? true,
   };
 };
 
@@ -238,7 +282,38 @@ export const PositionTable = () => {
             <div className="mp-range">
               <div className="mp-range-value">{position.range}<ExternalLink size={13} /></div>
               <div className="mp-meta"><span>{position.quote}</span><b>•</b><span>{position.age}</span></div>
-              <div className="mp-spark"><span /></div>
+              {position.markerPct !== null ? (
+                <div
+                  className="mp-range-track"
+                  style={{
+                    position: 'relative',
+                    height: 6,
+                    width: 150,
+                    marginTop: 8,
+                    borderRadius: 3,
+                    background: position.inRange
+                      ? 'linear-gradient(90deg, #2dd4bf, #8b5cf6)'
+                      : 'linear-gradient(90deg, #475569, #64748b)',
+                    opacity: 0.9,
+                  }}
+                >
+                  <span
+                    style={{
+                      position: 'absolute',
+                      top: -3,
+                      left: `${position.markerPct}%`,
+                      transform: 'translateX(-50%)',
+                      width: 3,
+                      height: 12,
+                      borderRadius: 2,
+                      background: '#fff',
+                      boxShadow: '0 0 6px rgba(255,255,255,0.85)',
+                    }}
+                  />
+                </div>
+              ) : (
+                <div className="mp-spark"><span /></div>
+              )}
             </div>
             <div className="mp-stack">
               <div className="mp-main">{position.liquidityUsd}</div>

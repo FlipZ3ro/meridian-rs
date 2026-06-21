@@ -673,6 +673,23 @@ async fn enrich_position_state(payload: &mut Value, config: &Config) {
             if let Some(value) = pnl.current_value_usd {
                 obj.insert("live_value_usd".to_string(), json!(value));
             }
+            // Real price range + active price (for the Meteora-style range bar)
+            // and the 24h fee/TVL APR shown as the fee badge.
+            if let Some(value) = pnl.min_price {
+                obj.insert("price_min".to_string(), json!(value));
+            }
+            if let Some(value) = pnl.max_price {
+                obj.insert("price_max".to_string(), json!(value));
+            }
+            if let Some(value) = pnl.active_price {
+                obj.insert("price_active".to_string(), json!(value));
+            }
+            if let Some(value) = pnl.fee_per_tvl_24h {
+                obj.insert("fee_apr_pct".to_string(), json!(value));
+            }
+            if let Some(value) = pnl.in_range {
+                obj.insert("in_range".to_string(), json!(value));
+            }
         }
     }
 }
