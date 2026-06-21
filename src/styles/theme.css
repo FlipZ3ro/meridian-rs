@@ -569,8 +569,9 @@ h3 { font-size: 15px; }
   padding: 22px 18px;
   border: 1px solid rgba(177, 169, 211, 0.16);
   border-radius: 18px;
-  background: rgba(13, 14, 26, 0.55);
-  backdrop-filter: blur(14px);
+  background: rgba(13, 14, 26, 0.6);
+  backdrop-filter: blur(14px) saturate(1.05);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
   overflow-y: auto;
   scrollbar-width: thin;
 }
@@ -618,6 +619,16 @@ h3 { font-size: 15px; }
   scrollbar-width: thin;
 }
 .dash-main > *, .dash-rail > * { flex: 0 0 auto; }
+/* Make every center/right panel a solid dark card matching the sidebar, so the
+   whole dashboard reads as one cohesive app (not glass over the wallpaper). */
+.dash-main > .glass-card,
+.dash-rail > .glass-card {
+  border: 1px solid rgba(177, 169, 211, 0.16);
+  border-radius: 18px;
+  background: rgba(13, 14, 26, 0.6);
+  backdrop-filter: blur(14px) saturate(1.05);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+}
 .dash-main::-webkit-scrollbar, .dash-rail::-webkit-scrollbar, .dash-sidebar::-webkit-scrollbar { width: 6px; }
 .dash-main::-webkit-scrollbar-thumb, .dash-rail::-webkit-scrollbar-thumb, .dash-sidebar::-webkit-scrollbar-thumb { background: rgba(177, 169, 211, 0.18); border-radius: 3px; }
 
