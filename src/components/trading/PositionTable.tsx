@@ -124,7 +124,13 @@ const formatPriceRange = (min?: number, max?: number) => {
   return `${formatSubPrice(min as number)} - ${formatSubPrice(max as number)}`;
 };
 
-const SOL_ICON = 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png';
+// Route token images through a fast image proxy/cache (weserv) so slow or
+// rate-limited sources (ipfs.io especially) still load as small circular icons
+// instead of erroring out to the fallback dot.
+const proxiedIcon = (url?: string | null) =>
+  url ? `https://wsrv.nl/?url=${encodeURIComponent(url)}&w=32&h=32&fit=cover&output=webp` : null;
+
+const SOL_ICON = proxiedIcon('https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png');
 
 // DexScreener resolves a token image directly from its Solana mint.
 const tokenIconUrl = (mint?: string | null) =>
@@ -238,7 +244,7 @@ const mapPosition = (position: BackendPosition, pricing: PricingContext): Positi
     age: formatAge(position.created_at),
     markerPct,
     inRange: position.in_range ?? true,
-    baseIcon: position.base_icon ?? tokenIconUrl(mint ?? position.base_mint),
+    baseIcon: proxiedIcon(position.base_icon ?? tokenIconUrl(mint ?? position.base_mint)),
     posId: position.id ?? '',
   };
 };
