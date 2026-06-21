@@ -807,14 +807,16 @@ h3 { font-size: 15px; }
 .candidate-head,
 .candidate-row {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) .72fr .72fr .86fr;
+  grid-template-columns: minmax(0, 1.5fr) .5fr .8fr .7fr;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 .candidate-head { padding: 0 5px 8px; color: var(--purple); font-size: 11px; font-weight: 800; letter-spacing: .08em; border-bottom: 1px dashed rgba(168, 181, 211, 0.42); }
 .candidate-list { display: grid; gap: 2px; margin-top: 8px; }
 .candidate-row { min-height: 42px; padding: 0 5px; color: #cbd4e6; font-size: 12px; border-bottom: 1px dashed rgba(168, 181, 211, 0.12); }
 .candidate-row div { min-width: 0; display: grid; gap: 3px; }
+.candidate-row .cand-pair { display: flex; align-items: center; gap: 7px; }
+.candidate-row .cand-pair-text { display: grid; gap: 2px; min-width: 0; }
 .candidate-row strong,
 .candidate-row small,
 .candidate-row span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

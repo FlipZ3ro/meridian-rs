@@ -39,6 +39,8 @@ pub struct TokenX {
     pub launchpad: Option<String>,
     pub launchpad_platform: Option<String>,
     pub created_at: Option<f64>,
+    #[serde(default)]
+    pub icon: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,6 +103,8 @@ pub struct PoolToken {
     pub organic: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mcap: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
 }
 
 /// Pool Discovery API response wrapper

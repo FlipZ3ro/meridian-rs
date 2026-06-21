@@ -435,6 +435,7 @@ pub fn signal_to_raw_pool(signal: &DiscordSignalRecord) -> Option<RawPool> {
             launchpad: None,
             launchpad_platform: None,
             created_at: None,
+            icon: None,
         }),
         token_y: Some(TokenY {
             address: Some("So11111111111111111111111111111111111111112".to_string()),
@@ -542,6 +543,7 @@ fn ensure_token_x(pool: &mut RawPool, signal: &DiscordSignalRecord) {
                 launchpad: pool.base_token_launchpad.clone(),
                 launchpad_platform: None,
                 created_at: None,
+                icon: None,
             });
         }
     }
@@ -606,6 +608,7 @@ mod tests {
                 launchpad: Some("meteora".to_string()),
                 launchpad_platform: None,
                 created_at: None,
+                icon: None,
             }),
             token_y: Some(TokenY {
                 address: Some("So11111111111111111111111111111111111111112".to_string()),

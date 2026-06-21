@@ -14,6 +14,7 @@ type Candidate = {
   fees_sol?: number;
   fee_active_tvl_ratio?: number;
   volatility?: number;
+  base?: { mint?: string; symbol?: string; icon?: string };
 };
 
 const formatCompact = (value?: number) => {
@@ -21,6 +22,29 @@ const formatCompact = (value?: number) => {
   if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
   if (Math.abs(value) >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
   return value.toFixed(value >= 10 ? 0 : 2);
+};
+
+// Route token images through the weserv proxy/cache so slow gateways (ipfs.io)
+// still load as small circular icons.
+const proxiedIcon = (url?: string | null) =>
+  url ? `https://wsrv.nl/?url=${encodeURIComponent(url)}&w=32&h=32&fit=cover&output=webp` : null;
+
+const TokenLogo = ({ src, alt }: { src: string | null; alt: string }) => {
+  const [errored, setErrored] = useState(false);
+  if (!src || errored) {
+    return <i style={{ width: 16, height: 16, borderRadius: '50%', flexShrink: 0, background: 'linear-gradient(135deg,#2dd4bf,#8b5cf6)', display: 'inline-block' }} />;
+  }
+  return (
+    <img
+      src={src}
+      alt={alt}
+      width={16}
+      height={16}
+      loading="lazy"
+      onError={() => setErrored(true)}
+      style={{ width: 16, height: 16, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }}
+    />
+  );
 };
 
 export const CandidateWidget = () => {
@@ -64,13 +88,16 @@ export const CandidateWidget = () => {
       <div className="candidate-list">
         {candidates.length ? candidates.map((candidate) => (
           <div className="candidate-row" key={candidate.pool_address ?? candidate.name}>
-            <div>
-              <strong>{candidate.name ?? 'UNKNOWN'}</strong>
-              <small>{candidate.pool_address ? `${candidate.pool_address.slice(0, 5)}...${candidate.pool_address.slice(-5)}` : '-'}</small>
+            <div className="cand-pair">
+              <TokenLogo src={proxiedIcon(candidate.base?.icon)} alt={candidate.base?.symbol ?? candidate.name ?? ''} />
+              <div className="cand-pair-text">
+                <strong>{candidate.name ?? 'UNKNOWN'}</strong>
+                <small>{candidate.pool_address ? `${candidate.pool_address.slice(0, 4)}…${candidate.pool_address.slice(-4)}` : '-'}</small>
+              </div>
             </div>
             <span>{formatCompact(candidate.score)}</span>
             <span>${formatCompact(candidate.tvl)}</span>
-            <span className="profit">{formatCompact(candidate.fees_sol)} SOL</span>
+            <span className="profit">◎{formatCompact(candidate.fees_sol)}</span>
           </div>
         )) : <div className="candidate-empty">{filteredReason}</div>}
       </div>

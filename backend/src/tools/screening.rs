@@ -304,6 +304,7 @@ fn condense_raw_pool(pool: &RawPool) -> CondensedPool {
             symbol: base_symbol,
             organic: base_organic,
             mcap: Some(mcap),
+            icon: base.and_then(|b| b.icon.clone()),
         },
         quote_organic,
         tvl: pool.tvl.or(pool.active_tvl).unwrap_or(0.0),
@@ -757,6 +758,7 @@ mod tests {
                 symbol: symbol.to_string(),
                 organic: 75.0,
                 mcap: Some(500_000.0),
+                icon: None,
             },
             quote_organic: 80.0,
             tvl,
@@ -910,6 +912,7 @@ mod tests {
                 launchpad: None,
                 launchpad_platform: None,
                 created_at: Some(0.0),
+                icon: None,
             }),
             token_y: Some(crate::models::pool::TokenY {
                 address: Some("So11111111111111111111111111111111111111112".to_string()),
