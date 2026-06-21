@@ -70,11 +70,10 @@ export const Sidebar = () => {
         <p>DLMM_AGENT</p>
       </div>
 
-      <div className="stat-list">
+      <div className="stat-grid">
         {stats.map((stat) => (
-          <div className="stat-row" key={stat.label}>
-            <stat.icon size={21} />
-            <span>{stat.label}</span>
+          <div className="stat-tile" key={stat.label}>
+            <div className="st-head"><stat.icon size={15} /><span>{stat.label}</span></div>
             <strong className={toneClass(stat.tone)}>{stat.value}</strong>
           </div>
         ))}

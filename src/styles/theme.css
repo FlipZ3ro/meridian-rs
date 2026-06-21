@@ -540,6 +540,20 @@ h3 { font-size: 15px; }
 .portfolio-row .pr-pool strong { color: #e8edf8; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .portfolio-row .pr-pool small { color: #8e98ad; font-size: 11px; }
 
+/* ── Profile stat tiles (2×2 grid) ─────────────────────────────── */
+.terminal-sidebar .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 11px; margin-top: 12px; }
+.terminal-sidebar .stat-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 14px 14px 16px;
+  border: 1px solid rgba(177, 169, 211, 0.16);
+  border-radius: 13px;
+  background: rgba(21, 20, 38, 0.42);
+}
+.terminal-sidebar .stat-tile .st-head { display: flex; align-items: center; gap: 7px; color: #8e98ad; font-size: 11px; font-weight: 600; letter-spacing: 0.02em; }
+.terminal-sidebar .stat-tile strong { font-size: 23px; font-weight: 850; color: #eaf0fb; line-height: 1; }
+
 .trades-card { min-height: 0; }
 .terminal-trades { padding: 26px 28px; }
 .compact { padding-bottom: 28px; }
