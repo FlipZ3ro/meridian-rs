@@ -5,15 +5,21 @@ import { BarChart3, CircleDollarSign, Layers, Target, type LucideIcon } from 'lu
 import { GlassCard } from '../ui/GlassCard';
 import { cachedJson } from '../../lib/clientCache';
 
-const formatSol = (value: number) => `${value >= 0 ? '+ ' : '- '}$${Math.abs(value).toFixed(2)}`;
+type Tone = 'up' | 'down' | 'none';
+type Stat = { label: string; value: string; icon: LucideIcon; tone: Tone };
+
+const formatSol = (value: number) => `${value >= 0 ? '+' : '-'}$${Math.abs(value).toFixed(2)}`;
+const toneClass = (tone: Tone) => (tone === 'up' ? 'profit' : tone === 'down' ? 'loss' : '');
+
+const DEFAULT_STATS: Stat[] = [
+  { label: 'Trades', value: '0', icon: BarChart3, tone: 'none' },
+  { label: 'PnL', value: '+$0.00', icon: CircleDollarSign, tone: 'up' },
+  { label: 'Open Positions', value: '0', icon: Layers, tone: 'none' },
+  { label: 'Win Rate', value: '-', icon: Target, tone: 'none' },
+];
 
 export const Sidebar = () => {
-  const [stats, setStats] = useState<Array<[string, string, LucideIcon]>>([
-    ['Trades', '0', BarChart3],
-    ['PnL', '+ $0.00', CircleDollarSign],
-    ['Open Positions', '0', Layers],
-    ['Win Rate', '-', Target],
-  ]);
+  const [stats, setStats] = useState<Stat[]>(DEFAULT_STATS);
 
   useEffect(() => {
     let isMounted = true;
@@ -28,14 +34,19 @@ export const Sidebar = () => {
         const history = performance?.data?.history ?? {};
         const trades = history.count ?? 0;
         const pnl = Number(history.total_pnl_sol ?? 0);
-        const winRate = history.win_rate_pct == null ? '-' : `${Number(history.win_rate_pct).toFixed(0)}%`;
+        const winPct = history.win_rate_pct;
 
         if (isMounted) {
           setStats([
-            ['Trades', String(trades), BarChart3],
-            ['PnL', formatSol(pnl), CircleDollarSign],
-            ['Open Positions', String(activePositions), Layers],
-            ['Win Rate', winRate, Target],
+            { label: 'Trades', value: String(trades), icon: BarChart3, tone: 'none' },
+            { label: 'PnL', value: formatSol(pnl), icon: CircleDollarSign, tone: pnl >= 0 ? 'up' : 'down' },
+            { label: 'Open Positions', value: String(activePositions), icon: Layers, tone: 'none' },
+            {
+              label: 'Win Rate',
+              value: winPct == null ? '-' : `${Number(winPct).toFixed(0)}%`,
+              icon: Target,
+              tone: winPct == null ? 'none' : Number(winPct) >= 50 ? 'up' : 'down',
+            },
           ]);
         }
       } catch {
@@ -60,11 +71,11 @@ export const Sidebar = () => {
       </div>
 
       <div className="stat-list">
-        {stats.map(([label, value, Icon]) => (
-          <div className="stat-row" key={label}>
-            <Icon size={21} />
-            <span>{label}</span>
-            <strong className={label === 'PnL' ? 'profit' : ''}>{value}</strong>
+        {stats.map((stat) => (
+          <div className="stat-row" key={stat.label}>
+            <stat.icon size={21} />
+            <span>{stat.label}</span>
+            <strong className={toneClass(stat.tone)}>{stat.value}</strong>
           </div>
         ))}
       </div>
