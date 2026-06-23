@@ -50,6 +50,22 @@ fn json_str<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a str> {
     keys.iter().find_map(|key| value.get(*key)?.as_str())
 }
 
+/// Per-session lock key. For deploy_position the key is scoped to the target
+/// pool so the screener can fill several DISTINCT pools in one session (multi-
+/// slot fill) while still being blocked from re-deploying — or retry-spamming —
+/// the SAME pool. All other once-locked tools key on the bare tool name.
+fn lock_key(name: &str, args: &Value) -> String {
+    if name == "deploy_position" {
+        let pool = args
+            .get("pool_address")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        format!("deploy_position:{}", pool)
+    } else {
+        name.to_string()
+    }
+}
+
 fn set_json_string_if_missing(value: &mut Value, key: &str, content: Option<&str>) {
     let Some(content) = content.filter(|text| !text.is_empty()) else {
         return;
@@ -299,21 +315,19 @@ impl ToolExecutor {
         }
     }
 
-    pub fn is_once_locked(&self, name: &str) -> bool {
-        LOCK_ON_FIRST_ATTEMPT.contains(&name) && self.executed_once.contains(&name.to_string())
+    pub fn is_once_locked(&self, name: &str, args: &Value) -> bool {
+        LOCK_ON_FIRST_ATTEMPT.contains(&name) && self.executed_once.contains(&lock_key(name, args))
     }
 
     /// Lock a tool after execution if it qualifies.
-    pub fn maybe_lock(&mut self, name: &str, success: bool) {
+    pub fn maybe_lock(&mut self, name: &str, args: &Value, success: bool) {
+        let key = lock_key(name, args);
         if LOCK_ON_FIRST_ATTEMPT.contains(&name) {
-            if !self.executed_once.contains(&name.to_string()) {
-                self.executed_once.push(name.to_string());
+            if !self.executed_once.contains(&key) {
+                self.executed_once.push(key);
             }
-        } else if LOCK_ON_SUCCESS.contains(&name)
-            && success
-            && !self.executed_once.contains(&name.to_string())
-        {
-            self.executed_once.push(name.to_string());
+        } else if LOCK_ON_SUCCESS.contains(&name) && success && !self.executed_once.contains(&key) {
+            self.executed_once.push(key);
         }
     }
 
@@ -329,7 +343,7 @@ impl ToolExecutor {
             .unwrap_or(Value::Object(serde_json::Map::new()));
 
         // ── Once-per-session lock ──────────────────────────────
-        if self.is_once_locked(name) {
+        if self.is_once_locked(name, &args) {
             return (
                 format!("Tool {} already executed this session. Skipping.", name),
                 true,
@@ -358,11 +372,11 @@ impl ToolExecutor {
                 let is_ok = !msg.contains("\"success\":false")
                     && !msg.contains("error")
                     && !msg.contains("STUB");
-                self.maybe_lock(name, is_ok);
+                self.maybe_lock(name, &args, is_ok);
                 (msg, false)
             }
             Err(e) => {
-                self.maybe_lock(name, false);
+                self.maybe_lock(name, &args, false);
                 (format!("Tool {} error: {}", name, e), true)
             }
         };

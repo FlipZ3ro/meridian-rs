@@ -188,6 +188,12 @@ async fn main() -> Result<()> {
     // ── Graceful shutdown channel ──────────────────────────────
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
+    // ── Deploy-on-close signal ─────────────────────────────────
+    // When a management cycle closes a position, wake the screening cycle
+    // immediately instead of waiting for its next interval tick, so freed
+    // capital gets redeployed fast (fee-printing rotation).
+    let redeploy_notify = std::sync::Arc::new(tokio::sync::Notify::new());
+
     // Spawn Ctrl+C handler
     let shutdown_tx_clone = shutdown_tx.clone();
     tokio::spawn(async move {
@@ -266,6 +272,7 @@ async fn main() -> Result<()> {
     let mgmt_pool_memory_path = pool_memory_path.clone();
     let wallet_mgmt = wallet_address.clone();
     let mut shutdown_mgmt = shutdown_rx.clone();
+    let redeploy_notify_mgmt = redeploy_notify.clone();
 
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(mgmt_interval);
@@ -294,6 +301,8 @@ async fn main() -> Result<()> {
                 }
             };
 
+            let active_before = positions.count_active();
+
             match run_management_cycle(
                 &config_mgmt,
                 &llm_mgmt,
@@ -314,6 +323,12 @@ async fn main() -> Result<()> {
                     if let Err(e) = positions.save(&mgmt_state_path) {
                         warn("mgmt", &format!("Failed to save state: {}", e));
                     }
+                    // A position closed this cycle → freed a slot. Wake the
+                    // screening cycle now so capital is redeployed immediately.
+                    if positions.count_active() < active_before {
+                        info("mgmt", "Position closed — triggering immediate screening");
+                        redeploy_notify_mgmt.notify_one();
+                    }
                 }
                 Err(e) => {
                     warn("mgmt", &format!("Management cycle error: {}", e));
@@ -331,6 +346,7 @@ async fn main() -> Result<()> {
     let screen_pool_memory_path = pool_memory_path.clone();
     let wallet_screen = wallet_address.clone();
     let mut shutdown_screen = shutdown_rx.clone();
+    let redeploy_notify_screen = redeploy_notify.clone();
 
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(screen_interval);
@@ -338,6 +354,9 @@ async fn main() -> Result<()> {
         loop {
             tokio::select! {
                 _ = interval.tick() => {}
+                _ = redeploy_notify_screen.notified() => {
+                    info("screen", "Redeploy signal received (position closed) — screening now");
+                }
                 _ = shutdown_screen.changed() => {
                     info("screen", "Shutdown signal received, stopping screening cycle");
                     break;

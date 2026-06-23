@@ -22,22 +22,19 @@ static MANAGER_TOOLS: &[&str] = &[
     "get_wallet_balance",
 ];
 
+// Lean fast-deploy toolset. Candidates returned by get_top_candidates have
+// already passed every screening filter (TVL, volume, holders, bundlers,
+// fee/TVL, age, etc.) and deploy_position re-validates pool detail on-chain,
+// so per-candidate research tools (token holders/narrative/info, top-LPer
+// study, smart-wallet checks) only add slow LLM round-trips and delay
+// deployment. They are kept out of the screener so it goes straight from
+// get_top_candidates → deploy_position for fast fee-printing rotation.
 static SCREENER_TOOLS: &[&str] = &[
-    "get_recent_decisions",
-    "get_performance_history",
-    "deploy_position",
-    "get_active_bin",
     "get_top_candidates",
-    "check_smart_wallets_on_pool",
-    "study_top_lpers",
-    "get_top_lpers",
-    "get_token_holders",
-    "get_token_narrative",
-    "get_token_info",
-    "search_pools",
+    "deploy_position",
     "get_pool_memory",
-    "get_wallet_balance",
     "get_my_positions",
+    "get_wallet_balance",
 ];
 
 static STRATEGY_TOOLS: &[&str] = &[
