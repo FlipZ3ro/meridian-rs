@@ -925,32 +925,52 @@ impl ToolExecutor {
             return Ok(());
         }
 
-        info(
-            "executor",
-            &format!("Auto-swapping {} of {} back to SOL", balance, base_mint),
-        );
-        // 300 bps (3%) slippage — fee/withdraw amounts are small and we prefer a
-        // filled swap over a tight price on thin, volatile launch tokens.
-        match swap_token(&base_mint, balance, 300, 100, config).await {
-            Ok(swap) => {
-                if let Some(map) = close_result.as_object_mut() {
-                    map.insert("autoSwapped".to_string(), Value::Bool(swap.success));
-                    if let Some(tx) = swap.tx {
-                        map.insert("autoSwapTx".to_string(), Value::String(tx));
+        // Retry the swap a few times. Jupiter intermittently returns
+        // "Failed to get quotes" for thin/volatile launch tokens even when a
+        // route exists moments later, which previously left the token unswapped
+        // until the next claim/close swept it. 300 bps (3%) slippage — fee/
+        // withdraw amounts are small and we prefer a filled swap over a tight
+        // price. balance==0 already returned above, so we never delay closes
+        // that produced no base token.
+        let mut last_error: Option<String> = None;
+        for attempt in 1..=3u32 {
+            info(
+                "executor",
+                &format!(
+                    "Auto-swapping {} of {} back to SOL (attempt {}/3)",
+                    balance, base_mint, attempt
+                ),
+            );
+            match swap_token(&base_mint, balance, 300, 100, config).await {
+                Ok(swap) if swap.success => {
+                    if let Some(map) = close_result.as_object_mut() {
+                        map.insert("autoSwapped".to_string(), Value::Bool(true));
+                        if let Some(tx) = swap.tx {
+                            map.insert("autoSwapTx".to_string(), Value::String(tx));
+                        }
+                        if let Some(amount_out) = swap.amount_out {
+                            map.insert("solReceived".to_string(), Value::String(amount_out));
+                        }
                     }
-                    if let Some(amount_out) = swap.amount_out {
-                        map.insert("solReceived".to_string(), Value::String(amount_out));
-                    }
-                    if let Some(error) = swap.error {
-                        map.insert("autoSwapError".to_string(), Value::String(error));
-                    }
+                    return Ok(());
                 }
+                Ok(swap) => {
+                    last_error = swap
+                        .error
+                        .or_else(|| Some("swap returned success=false".to_string()));
+                }
+                Err(e) => last_error = Some(e.to_string()),
             }
-            Err(e) => {
-                if let Some(map) = close_result.as_object_mut() {
-                    map.insert("autoSwapped".to_string(), Value::Bool(false));
-                    map.insert("autoSwapError".to_string(), Value::String(e.to_string()));
-                }
+            if attempt < 3 {
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            }
+        }
+        // All attempts failed — record the last error. Token stays in the wallet
+        // and the next claim/close on this token will retry the swap.
+        if let Some(map) = close_result.as_object_mut() {
+            map.insert("autoSwapped".to_string(), Value::Bool(false));
+            if let Some(err) = last_error {
+                map.insert("autoSwapError".to_string(), Value::String(err));
             }
         }
         Ok(())
