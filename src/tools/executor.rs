@@ -527,6 +527,29 @@ impl ToolExecutor {
                     anyhow::bail!("could not verify pool before deploy");
                 }
 
+                // On-chain dedup guard (LAST check — smallest race window).
+                // The tracked-state checks above can be bypassed if two screening
+                // cycles overlap (deploy #1 not yet saved when deploy #2 validates).
+                // This queries the wallet's live on-chain positions and refuses if
+                // ANY already sits in this pool — closing the race for real.
+                match crate::tools::meteora_native::discover_wallet_positions(config).await {
+                    Ok(onchain) => {
+                        if onchain.iter().any(|(_pos, lb_pair)| lb_pair == pool_addr) {
+                            anyhow::bail!(
+                                "on-chain position already exists in pool {} (race guard)",
+                                &pool_addr[..12.min(pool_addr.len())]
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        // Don't hard-fail deploy on a transient RPC hiccup, but log it.
+                        info(
+                            "executor",
+                            &format!("on-chain dedup check skipped (rpc error): {}", e),
+                        );
+                    }
+                }
+
                 Ok(())
             }
             "close_position" => {

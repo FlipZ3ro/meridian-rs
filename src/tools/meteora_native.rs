@@ -372,6 +372,64 @@ pub async fn close_position(
     })
 }
 
+/// Meteora DLMM (lb_clmm) program id. PositionV2 layout: 8-byte discriminator,
+/// then lb_pair (32), then owner (32) — so owner sits at offset 40.
+const LB_CLMM_PROGRAM_ID: &str = "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo";
+
+/// Discover every DLMM position the wallet actually owns on-chain, returned as
+/// `(position_address, lb_pair_address)`. Uses getProgramAccounts filtered by the
+/// owner field, so it sees positions even if internal state lost track of them.
+pub async fn discover_wallet_positions(config: &Config) -> Result<Vec<(String, String)>> {
+    use base64::Engine;
+
+    let owner = keypair_from_secret(&wallet_secret_from_env()?)?
+        .pubkey()
+        .to_string();
+    let rpc_url = resolve_rpc_url(config);
+    let client = reqwest::Client::new();
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "getProgramAccounts",
+        "params": [LB_CLMM_PROGRAM_ID, {
+            "encoding": "base64",
+            "dataSlice": { "offset": 8, "length": 32 },
+            "filters": [ { "memcmp": { "offset": 40, "bytes": owner } } ]
+        }]
+    });
+    let resp: serde_json::Value = client
+        .post(&rpc_url)
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| anyhow!("getProgramAccounts request: {}", e))?
+        .json()
+        .await
+        .map_err(|e| anyhow!("getProgramAccounts parse: {}", e))?;
+
+    let mut out = Vec::new();
+    if let Some(arr) = resp["result"].as_array() {
+        for acc in arr {
+            let Some(pubkey) = acc["pubkey"].as_str() else {
+                continue;
+            };
+            let Some(data_b64) = acc["account"]["data"][0].as_str() else {
+                continue;
+            };
+            let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(data_b64) else {
+                continue;
+            };
+            if bytes.len() != 32 {
+                continue;
+            }
+            let lb_pair = bs58::encode(bytes).into_string();
+            out.push((pubkey.to_string(), lb_pair));
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
