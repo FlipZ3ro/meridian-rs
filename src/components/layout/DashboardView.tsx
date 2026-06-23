@@ -36,7 +36,7 @@ const NAV: Array<{ id: ViewId; label: string; icon: LucideIcon }> = [
 type Tone = 'up' | 'down' | 'none';
 type Stat = { label: string; value: string; icon: LucideIcon; tone: Tone };
 const toneClass = (tone: Tone) => (tone === 'up' ? 'profit' : tone === 'down' ? 'loss' : '');
-const formatSol = (value: number) => `${value >= 0 ? '+' : '-'}$${Math.abs(value).toFixed(2)}`;
+const formatUsd = (value: number) => `${value >= 0 ? '+' : '-'}$${Math.abs(value).toFixed(2)}`;
 
 const ProfileNav = ({ view, setView }: { view: ViewId; setView: (v: ViewId) => void }) => {
   const [stats, setStats] = useState<Stat[]>([
@@ -50,18 +50,21 @@ const ProfileNav = ({ view, setView }: { view: ViewId; setView: (v: ViewId) => v
     let mounted = true;
     const load = async () => {
       try {
-        const [status, performance] = await Promise.all([
+        // Use the same authoritative source as the Historical/Portfolio card
+        // (Meteora-aggregated closed positions) so the profile stats match.
+        const [status, portfolio] = await Promise.all([
           cachedJson<any>('/api/meridian/status', 8_000),
-          cachedJson<any>('/api/meridian/performance', 30_000),
+          cachedJson<any>('/api/meridian/portfolio', 60_000),
         ]);
         const active = status?.data?.active_positions ?? 0;
-        const h = performance?.data?.history ?? {};
-        const pnl = Number(h.total_pnl_sol ?? 0);
-        const winPct = h.win_rate_pct;
+        const s = portfolio?.data?.summary ?? {};
+        const trades = Number(s.closedCount ?? 0);
+        const pnl = Number(s.totalPnlUsd ?? 0);
+        const winPct = s.winRate;
         if (mounted) {
           setStats([
-            { label: 'Trades', value: String(h.count ?? 0), icon: BarChart3, tone: 'none' },
-            { label: 'PnL', value: formatSol(pnl), icon: CircleDollarSign, tone: pnl >= 0 ? 'up' : 'down' },
+            { label: 'Trades', value: String(trades), icon: BarChart3, tone: 'none' },
+            { label: 'PnL', value: formatUsd(pnl), icon: CircleDollarSign, tone: pnl >= 0 ? 'up' : 'down' },
             { label: 'Open Positions', value: String(active), icon: Layers, tone: 'none' },
             { label: 'Win Rate', value: winPct == null ? '-' : `${Number(winPct).toFixed(0)}%`, icon: Target, tone: winPct == null ? 'none' : Number(winPct) >= 50 ? 'up' : 'down' },
           ]);
