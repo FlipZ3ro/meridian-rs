@@ -375,6 +375,23 @@ pub async fn run_pnl_poll(
     positions: &mut PositionState,
     wallet_address: &str,
 ) -> Result<Vec<(String, String)>> {
+    let active_ids: Vec<String> = positions.get_active().iter().map(|p| p.id.clone()).collect();
+    if active_ids.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // Self-heal: mark any tracked-active position that's already gone on-chain as
+    // closed. A position closed by a prior exit (or externally) otherwise stays
+    // "active" in state until the next restart and shows stuck on the dashboard.
+    if let Ok(existing) = crate::tools::meteora_native::existing_positions(config, &active_ids).await
+    {
+        for id in &active_ids {
+            if !existing.contains(id) {
+                positions.mark_orphaned(id);
+            }
+        }
+    }
+
     let active = positions.get_active();
     if active.is_empty() {
         return Ok(vec![]);
