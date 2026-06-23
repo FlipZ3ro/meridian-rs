@@ -15,6 +15,7 @@ backend/backend.log
 backend/backend.err.log
 backend/user-config.velocity.json
 backend/user-config.test.json
+backend/user-config.backup.json
 
 # local dev server log
 frontend-dev.log
