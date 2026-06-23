@@ -458,6 +458,13 @@ async fn main() -> Result<()> {
                 }
             };
 
+            // Sync tracked state with the chain before managing: adopt any
+            // on-chain position we lost track of (e.g. a double-deploy whose 2nd
+            // add was dropped) and prune any that closed. Without this, an
+            // untracked position stays invisible on the dashboard and unmanaged
+            // by the bot until restart.
+            reconcile_positions_on_chain(&mut positions, &config_mgmt, &mgmt_state_path).await;
+
             match run_management_cycle(
                 &config_mgmt,
                 &llm_mgmt,
