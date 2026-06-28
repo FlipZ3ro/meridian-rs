@@ -24,7 +24,8 @@ pub struct Config {
     pub gmgn: GmgnConfig,
     #[serde(default)]
     pub hive_mind: HiveMindConfig,
-    #[serde(default)]
+    // Accept both "indicators" and the dashboard/flat-config "chartIndicators".
+    #[serde(default, alias = "chartIndicators")]
     pub indicators: IndicatorsConfig,
     #[serde(default)]
     pub darwin: DarwinConfig,
