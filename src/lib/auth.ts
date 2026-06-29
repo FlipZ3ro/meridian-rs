@@ -60,8 +60,10 @@ export const verifySession = async (token?: string | null): Promise<SessionPaylo
   }
 };
 
-// Allowlist of wallet pubkeys permitted to sign in. Empty = allow any (dev
-// convenience) — MUST be set to your wallet(s) before exposing publicly.
+// Allowlist of wallet pubkeys permitted to sign in via SIWS. Secure by default:
+// an empty allowlist means wallet login is DISABLED (not "allow any"). To enable
+// wallet login, set AUTH_ALLOWED_PUBKEYS to your wallet(s). Password login
+// (AUTH_PASSWORD) is the primary gate and is independent of this.
 export const allowedPubkeys = (): string[] =>
   (process.env.AUTH_ALLOWED_PUBKEYS || '')
     .split(',')
@@ -70,7 +72,7 @@ export const allowedPubkeys = (): string[] =>
 
 export const isAllowed = (pubkey: string): boolean => {
   const list = allowedPubkeys();
-  return list.length === 0 || list.includes(pubkey);
+  return list.length > 0 && list.includes(pubkey);
 };
 
 // Password login (works on any browser, incl. mobile where wallet injection is
