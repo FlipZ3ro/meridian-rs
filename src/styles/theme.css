@@ -1107,6 +1107,35 @@ h3 { font-size: 15px; }
   .system-tray { margin-left: 0; flex-wrap: wrap; }
 }
 
+/* ── Mobile / phone portrait — stack everything into one scrollable column ── */
+@media (max-width: 760px) {
+  /* the OS shell is 100vh + overflow:hidden on desktop — that's what clips the
+     dashboard on phones. Let the page grow and scroll vertically instead. */
+  .desktop-shell { height: auto; min-height: 100dvh; overflow-x: hidden; overflow-y: auto; padding: 6px 8px 24px; }
+  .dashboard-grid { height: auto; min-height: 0; overflow: visible; margin-top: 10px; }
+
+  /* dash-shell is a 3-column grid (268/1fr/496) — stack it */
+  .dash-shell { display: flex; flex-direction: column; height: auto; gap: 14px; }
+  .dash-sidebar { overflow: visible; padding: 18px 16px; backdrop-filter: none; }
+  .dash-main, .dash-rail { height: auto; }
+  .dash-main > .glass-card:last-child,
+  .dash-rail > .glass-card:last-child { flex: 0 0 auto; }
+
+  /* compact the profile/nav so real content isn't pushed far down */
+  .dash-avatar { width: 84px; height: 84px; }
+  .dash-profile h1 { font-size: 21px; }
+  .dash-nav { flex-direction: row; flex-wrap: nowrap; overflow-x: auto; gap: 8px; padding-bottom: 6px; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+  .dash-nav::-webkit-scrollbar { display: none; }
+  .dash-nav button { flex: 0 0 auto; white-space: nowrap; padding: 9px 13px; }
+
+  /* cards full-width, kill horizontal blur cost, allow wide tables to scroll */
+  .glass-card { width: 100%; }
+  .weather-meta { flex-wrap: wrap; }
+
+  /* topbar workspace switch stays usable */
+  .dock { gap: 8px; }
+}
+
 /* ── Workspace 2 — Live Charts (Bollinger %B) ───────────────────────── */
 .chart-grid-view {
   position: absolute; inset: 0; padding: clamp(14px, 1.4vw, 26px);
@@ -1237,3 +1266,15 @@ h3 { font-size: 15px; }
 .lock-hint { margin: 4px 0 0; color: var(--dim); font-family: var(--font-mono); font-size: 11px; }
 .lock-error { margin: 4px 0 0; color: var(--red); font-family: var(--font-mono); font-size: 11px; max-width: 280px; text-align: center; }
 .lock-checking { color: var(--muted); font-family: var(--font-mono); font-size: 13px; letter-spacing: .1em; position: relative; }
+
+/* ── Mobile: workspace-2 chart overrides (placed last so they win the cascade
+   over the absolute/flex base chart rules above) ──────────────────────────── */
+@media (max-width: 760px) {
+  /* base is position:absolute; inset:0 — collapses the auto-height page to 0.
+     Make it flow normally and size to its stacked cards. */
+  .chart-grid-view { position: relative; inset: auto; height: auto; overflow: visible; padding: 12px; }
+  /* base is flex:1; min-height:0 — collapses to 0 when the page (not a fixed
+     viewport) drives height. Size to content instead. */
+  .chart-grid { flex: 0 0 auto; min-height: auto; grid-template-columns: 1fr; grid-template-rows: none; }
+  .chart-card { min-height: 300px; }
+}
