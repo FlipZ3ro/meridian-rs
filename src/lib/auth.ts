@@ -73,6 +73,24 @@ export const isAllowed = (pubkey: string): boolean => {
   return list.length === 0 || list.includes(pubkey);
 };
 
+// Password login (works on any browser, incl. mobile where wallet injection is
+// unavailable). The password is stored server-side in AUTH_PASSWORD (.env.local,
+// root-only, gitignored). Constant-time compare to resist timing attacks. If
+// AUTH_PASSWORD is unset, password login is disabled (returns false).
+export const passwordLoginEnabled = (): boolean => Boolean(process.env.AUTH_PASSWORD);
+
+export const checkPassword = (input: string): boolean => {
+  const expected = process.env.AUTH_PASSWORD || '';
+  if (!expected || !input) return false;
+  const a = enc.encode(input);
+  const b = enc.encode(expected);
+  // constant-time-ish: always compare same length, fold in length mismatch
+  let diff = a.length ^ b.length;
+  const max = Math.max(a.length, b.length);
+  for (let i = 0; i < max; i += 1) diff |= (a[i] ?? 0) ^ (b[i] ?? 0);
+  return diff === 0;
+};
+
 // Human-readable message the wallet signs (includes the nonce).
 export const buildSignMessage = (nonce: string): string =>
   `Sign in to Meridian DLMM Agent\n\nThis request will not trigger a blockchain transaction or cost gas.\n\nNonce: ${nonce}`;

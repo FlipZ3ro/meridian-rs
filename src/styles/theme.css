@@ -1200,6 +1200,29 @@ h3 { font-size: 15px; }
 .lock-avatar img { width: 100%; height: 100%; object-fit: cover; }
 .lock-card h1 { margin: 6px 0 0; font-family: var(--font-display); font-size: 26px; font-weight: 600; color: #e8edf7; }
 .lock-sub { margin: 0; color: var(--muted); font-family: var(--font-mono); font-size: 12px; letter-spacing: .06em; }
+.lock-pw { display: flex; flex-direction: column; gap: 10px; width: 100%; margin-top: 14px; }
+.lock-input {
+  width: 100%; box-sizing: border-box;
+  padding: 11px 14px; border-radius: 10px;
+  border: 1px solid var(--line); color: #e8edf7;
+  background: rgba(8, 12, 20, 0.7);
+  font-family: var(--font-sans); font-size: 14px;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.lock-input::placeholder { color: var(--dim); }
+.lock-input:focus { outline: none; border-color: rgba(155,124,255,0.6); box-shadow: 0 0 0 3px rgba(155,124,255,0.14); }
+.lock-pw .lock-btn { margin-top: 0; justify-content: center; }
+.lock-btn-alt {
+  margin-top: 10px; width: 100%; justify-content: center;
+  background: rgba(255,255,255,0.04); border-color: var(--line);
+}
+.lock-link {
+  margin-top: 12px; background: none; border: none; cursor: pointer;
+  color: var(--muted); font-family: var(--font-mono); font-size: 11px;
+  text-decoration: underline; text-underline-offset: 3px;
+  transition: color .15s ease;
+}
+.lock-link:hover { color: #e8edf7; }
 .lock-btn {
   margin-top: 14px; display: inline-flex; align-items: center; gap: 8px;
   padding: 11px 22px; border-radius: 10px; cursor: pointer;

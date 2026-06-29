@@ -77,6 +77,7 @@ const formatUptime = (seconds: number) => {
 };
 
 const formatCpu = (systemInfo: SystemInfo) => {
+  if (!systemInfo?.cpuModel) return '—';
   const model = systemInfo.cpuModel
     .replace(/Intel\(R\)\s*/gi, '')
     .replace(/Core\(TM\)\s*/gi, '')
@@ -85,10 +86,11 @@ const formatCpu = (systemInfo: SystemInfo) => {
     .replace(/\s+/g, ' ')
     .trim();
 
-  return `${model} @ ${systemInfo.cpuSpeed.replace(' ', '')}`;
+  return `${model} @ ${(systemInfo.cpuSpeed ?? '').replace(' ', '')}`;
 };
 
 const formatGpu = (gpu: string) => {
+  if (!gpu) return '—';
   const match = gpu.match(/RTX\s.+/i);
   return match?.[0]?.replace(/\s+/g, ' ').trim() ?? gpu;
 };
@@ -470,7 +472,7 @@ export default function DashboardLayout() {
             <span><i>CPU</i><em>{formatCpu(systemInfo)}</em></span>
             <span><i>GPU</i><em>{formatGpu(systemInfo.gpu)}</em></span>
             <span><i>Memory</i><em>{toCapacity(systemInfo.ramTotal)}</em></span>
-            {systemInfo.disks.slice(0, 2).map((disk) => (
+            {(systemInfo.disks ?? []).slice(0, 2).map((disk) => (
               <span key={disk.id}><i>Disk {disk.id}</i><em>{toCapacity(disk.total)}</em></span>
             ))}
             <div className="color-strip"><em /><em /><em /><em /><em /><em /><em /><em /></div>

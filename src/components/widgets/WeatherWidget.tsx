@@ -41,7 +41,7 @@ export const WeatherWidget = () => {
     fetch('/api/weather')
       .then((response) => response.json())
       .then((data: Weather) => {
-        if (isMounted) setWeather(data);
+        if (isMounted && Array.isArray(data?.forecast)) setWeather(data);
       })
       .catch(() => {
         if (isMounted) setWeather(fallbackWeather);
