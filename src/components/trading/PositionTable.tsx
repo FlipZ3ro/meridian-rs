@@ -335,24 +335,6 @@ export const PositionTable = () => {
     };
   }, []);
 
-  // Claim fees / close a position via the backend control endpoint. These
-  // execute REAL on-chain transactions, so confirm first.
-  const runAction = async (action: 'claim_fees' | 'close_position', positionId: string, label: string) => {
-    if (!positionId) return;
-    const verb = action === 'close_position' ? 'Close' : 'Claim fees on';
-    if (!window.confirm(`${verb} ${label}? This sends a real on-chain transaction.`)) return;
-    setPositions((prev) => prev.map((p) => (p.posId === positionId ? { ...p, status: 'PENDING' } : p)));
-    try {
-      await fetch('/api/meridian/control', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, args: { position_address: positionId, reason: 'manual dashboard action' } }),
-      });
-    } catch {
-      /* surfaced on next refresh */
-    }
-  };
-
   return (
     <GlassCard className="positions-card terminal-positions">
       <div className="card-title">
@@ -360,7 +342,7 @@ export const PositionTable = () => {
         <span>{positions.length} POSITIONS</span>
       </div>
       <div className="position-head">
-        <span>Price Range</span><span>Your Liquidity</span><span>Claimable Fees</span><span>PnL</span><span style={{ textAlign: 'right' }}>Actions</span>
+        <span>Price Range</span><span>Your Liquidity</span><span>Claimable Fees</span><span>PnL</span>
       </div>
       <div className="position-rows">
         {positions.length ? positions.map((position) => (
@@ -414,24 +396,6 @@ export const PositionTable = () => {
             <div className={position.pnlPositive ? 'mp-pnl mp-up' : 'mp-pnl mp-down'} data-label="PnL">
               <div>{position.pnlUsd}</div>
               <span>{position.pnlPct}</span>
-            </div>
-            <div className="mp-actions" style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end', justifyContent: 'center' }}>
-              <button
-                type="button"
-                onClick={() => runAction('claim_fees', position.posId, position.pair)}
-                disabled={position.status === 'PENDING'}
-                style={{ fontSize: 12, fontWeight: 600, padding: '3px 12px', borderRadius: 6, border: 'none', cursor: 'pointer', background: '#2dd4bf', color: '#0b0b14' }}
-              >
-                Claim
-              </button>
-              <button
-                type="button"
-                onClick={() => runAction('close_position', position.posId, position.pair)}
-                disabled={position.status === 'PENDING'}
-                style={{ fontSize: 12, fontWeight: 600, padding: '3px 12px', borderRadius: 6, border: '1px solid rgba(177,169,211,0.25)', cursor: 'pointer', background: 'rgba(148,143,170,0.18)', color: '#d7d3e8' }}
-              >
-                {position.status === 'PENDING' ? '…' : 'Close'}
-              </button>
             </div>
           </div>
         )) : <div className="positions-empty">No active backend positions.</div>}

@@ -424,12 +424,12 @@ h3 { font-size: 15px; }
 .terminal-positions .position-row { border-bottom: 1px dashed rgba(168, 181, 211, 0.22); color: #cbd4e6; }
 .terminal-positions .position-row:hover { background: rgba(151, 169, 205, 0.035); }
 .position-head,
-.live-position-row { grid-template-columns: 1.28fr 1fr 1fr 0.72fr 0.6fr; }
+.live-position-row { grid-template-columns: 1.28fr 1fr 1fr 0.8fr; }
 .position-head { padding: 11px 12px 10px; color: #a8a2c4; font-size: 12px; font-weight: 560; letter-spacing: -0.02em; }
 .terminal-positions .position-head { border-bottom: 1px solid rgba(177, 169, 211, 0.14); }
 .meteora-position-row {
   display: grid;
-  grid-template-columns: 1.28fr 1fr 1fr 0.72fr 0.6fr;
+  grid-template-columns: 1.28fr 1fr 1fr 0.8fr;
   align-items: center;
   gap: 20px;
   min-height: 90px;
