@@ -426,6 +426,8 @@ pub async fn quote_position_state(position_address: &str, config: &Config) -> Re
 
 /// SPL Token program id.
 const SPL_TOKEN_PROGRAM_ID: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+/// Token-2022 (Token Extensions) program id.
+const TOKEN_2022_PROGRAM_ID: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
 /// Native mint (wrapped SOL).
 const WSOL_MINT: &str = "So11111111111111111111111111111111111111112";
 /// SPL Token `CloseAccount` instruction discriminator.
@@ -539,6 +541,20 @@ pub async fn wallet_token_ui_balance(config: &Config, mint: &str) -> Result<f64>
         }
     }
     Ok(total)
+}
+
+/// Whether `mint` is owned by the Token-2022 program (vs the legacy SPL Token
+/// program). The deploy SDK (`add_liquidity_one_shot`) only builds legacy-token
+/// instructions, so Token-2022 mints fail on-chain with "incorrect program id"
+/// and must be skipped at pre-flight.
+pub async fn is_token_2022(config: &Config, mint: &str) -> Result<bool> {
+    let mint_pk = Pubkey::from_str(mint)?;
+    let rpc = RpcClient::new(resolve_rpc_url(config));
+    let account = rpc
+        .get_account(&mint_pk)
+        .await
+        .map_err(|e| anyhow!("fetch mint account {}: {}", mint, e))?;
+    Ok(account.owner.to_string() == TOKEN_2022_PROGRAM_ID)
 }
 
 /// Return the subset of the given position ids whose accounts currently exist

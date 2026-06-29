@@ -529,6 +529,19 @@ impl ToolExecutor {
                             &base_mint[..8.min(base_mint.len())]
                         );
                     }
+
+                    // Token-2022 mints aren't supported by the deploy SDK
+                    // (add_liquidity builds with the legacy token program →
+                    // on-chain "incorrect program id"). Skip cleanly instead of
+                    // burning a failed transaction + gas.
+                    if let Ok(true) =
+                        crate::tools::meteora_native::is_token_2022(config, &base_mint).await
+                    {
+                        anyhow::bail!(
+                            "Token-2022 mint {} not supported by deploy SDK — skipped",
+                            &base_mint[..8.min(base_mint.len())]
+                        );
+                    }
                 }
 
                 // Pool cooldown check

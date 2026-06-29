@@ -102,6 +102,8 @@ const isSkip = (reason: string): boolean => {
     || r.includes('over-extended')
     || r.includes('cooldown')
     || r.includes('not enough sol')
+    || r.includes('not supported')
+    || r.includes('skipped')
     || r.includes('position_id required');
 };
 
