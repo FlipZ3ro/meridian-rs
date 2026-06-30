@@ -1168,6 +1168,15 @@ h3 { font-size: 15px; }
 .positions-tabbed .glass-card::before { display: none; } /* kill the inner card's dashed frame — the wrapper already draws one */
 .positions-tabbed .glass-card .card-title { display: none; }
 
+/* Pin the tabs + summary + column head; only the row list scrolls. Keeps the
+   header visible and the box at a fixed height instead of running long. */
+.positions-tabbed .positions-tab-body > .glass-card { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+.positions-tabbed .portfolio-summary,
+.positions-tabbed .portfolio-head,
+.positions-tabbed .position-head { flex: 0 0 auto; }
+.positions-tabbed .portfolio-rows,
+.positions-tabbed .position-rows { flex: 1 1 auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+
 /* Activity log: in the rail on desktop, but below the candidate radar in the
    main column on mobile. Rendered in both; toggled here. !important beats the
    `.dash-*  > .glass-card:last-child { display: flex }` stretch rule. */
@@ -1178,7 +1187,7 @@ h3 { font-size: 15px; }
      radar, so the radar's height/bottom roughly lines up with the activity log
      in the right rail (instead of the radar ballooning to fill the column). */
   .dash-main .positions-tabbed { flex: 1 1 0; display: flex; flex-direction: column; min-height: 0; }
-  .positions-tabbed .positions-tab-body { flex: 1; min-height: 0; overflow: auto; scrollbar-width: thin; }
+  .positions-tabbed .positions-tab-body { flex: 1; min-height: 0; overflow: hidden; }
   .dash-main .candidate-card { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
   .dash-main .candidate-card .candidate-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; align-content: start; scrollbar-width: thin; }
 }
@@ -1231,6 +1240,12 @@ h3 { font-size: 15px; }
   .portfolio-summary .ps-stat span { font-size: 10px; letter-spacing: -0.02em; }
   .portfolio-summary .ps-stat b { font-size: 13px; }
   .portfolio-summary .ps-stat b em { font-size: 9px; }
+
+  /* Keep the tabbed card a fixed height and scroll the rows inside it, instead
+     of the Closed table running the page very long. Tabs + summary + column
+     head stay pinned (they sit above the scrolling row list). */
+  .positions-tabbed { display: flex; flex-direction: column; max-height: 78dvh; min-height: 0; }
+  .positions-tabbed .positions-tab-body { flex: 1 1 auto; min-height: 0; overflow: hidden; }
 
   /* The weather/music/candidate rail is ambient — only keep it on the Overview
      view. On Positions/Activity/etc. it just clutters the bottom of every tab. */
