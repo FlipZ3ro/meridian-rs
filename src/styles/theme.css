@@ -1241,10 +1241,10 @@ h3 { font-size: 15px; }
   .portfolio-summary .ps-stat b { font-size: 13px; }
   .portfolio-summary .ps-stat b em { font-size: 9px; }
 
-  /* Keep the tabbed card a fixed height and scroll the rows inside it, instead
-     of the Closed table running the page very long. Tabs + summary + column
-     head stay pinned (they sit above the scrolling row list). */
-  .positions-tabbed { display: flex; flex-direction: column; max-height: 78dvh; min-height: 0; }
+  /* Fixed-height tabbed card so Open and Closed share the exact same box
+     height (no jump when switching tabs) and the row list scrolls inside it.
+     Sized to fit ~4 open positions; tabs + summary + head stay pinned. */
+  .positions-tabbed { display: flex; flex-direction: column; height: 78dvh; min-height: 0; }
   .positions-tabbed .positions-tab-body { flex: 1 1 auto; min-height: 0; overflow: hidden; }
 
   /* The weather/music/candidate rail is ambient — only keep it on the Overview
