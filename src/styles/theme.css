@@ -1234,10 +1234,11 @@ h3 { font-size: 15px; }
   /* cards full-width */
   .glass-card { width: 100%; }
 
-  /* HISTORICAL summary: keep all 5 stats on ONE row, but drop the vertical
-     dividers and tighten spacing so it reads clean instead of cramped. */
-  .portfolio-summary { grid-template-columns: 1.25fr 1fr 1fr 1fr 1fr; gap: 7px; padding: 14px 4px 14px; }
-  .portfolio-summary .ps-stat { padding-left: 0; border-left: 0; }
+  /* HISTORICAL summary: all 5 stats on ONE row with thin vertical dividers
+     (cleaner), tightened type so they fit without feeling cramped. */
+  .portfolio-summary { grid-template-columns: 1.25fr 1fr 1fr 1fr 1fr; gap: 9px; padding: 14px 4px 14px; }
+  .portfolio-summary .ps-stat { padding-left: 9px; border-left: 1px solid rgba(168, 181, 211, 0.20); }
+  .portfolio-summary .ps-stat:first-child { padding-left: 0; border-left: 0; }
   .portfolio-summary .ps-stat span { font-size: 10px; letter-spacing: -0.03em; }
   .portfolio-summary .ps-stat b { font-size: 14px; letter-spacing: -0.02em; }
   .portfolio-summary .ps-stat:first-child b { font-size: 15.5px; }
