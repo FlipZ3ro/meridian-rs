@@ -8,6 +8,12 @@ use std::path::Path;
 use crate::config::types::ManagementConfig;
 
 const LOW_YIELD_COOLDOWN_HOURS: u32 = 4;
+// Repeat-loss guard: a base token that closes at a loss this many times (across
+// ALL its pools) while net-negative is a systematic bleeder — cool it down hard
+// at the token level so the screener stops re-deploying into it.
+const REPEAT_LOSS_TRIGGER: usize = 2;
+const REPEAT_LOSS_COOLDOWN_HOURS: u32 = 24;
+const REPEAT_LOSS_THRESHOLD_PCT: f64 = -1.0; // ignore ~breakeven closes
 const MAX_NOTE_LENGTH: usize = 280;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -315,6 +321,35 @@ impl PoolMemoryStore {
                             reason,
                         ));
                     }
+                }
+            }
+        }
+
+        // Repeat-loss guard (token-level, across ALL pools of this base mint).
+        // SUPERMAN lost across its 80- and 100-bin-step pools — a per-pool count
+        // never catches that, so aggregate by base token. If the token has at
+        // least REPEAT_LOSS_TRIGGER losing closes AND is net-negative overall,
+        // cool the whole token down so the bot stops re-entering a known bleeder.
+        if let Some(base_mint) = input.base_mint.as_deref() {
+            if !base_mint.is_empty() {
+                let (loss_count, net_pnl) = self
+                    .pools
+                    .values()
+                    .filter(|e| e.base_mint == base_mint)
+                    .flat_map(|e| e.deploys.iter())
+                    .filter_map(|d| d.pnl_pct)
+                    .fold((0usize, 0.0f64), |(c, s), p| {
+                        (
+                            if p <= REPEAT_LOSS_THRESHOLD_PCT { c + 1 } else { c },
+                            s + p,
+                        )
+                    });
+                if loss_count >= REPEAT_LOSS_TRIGGER && net_pnl < 0.0 {
+                    pending_base_cooldowns.push((
+                        base_mint.to_string(),
+                        REPEAT_LOSS_COOLDOWN_HOURS,
+                        format!("repeat losses ({loss_count}x, net {net_pnl:.1}%)"),
+                    ));
                 }
             }
         }
