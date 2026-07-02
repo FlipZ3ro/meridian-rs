@@ -677,6 +677,51 @@ impl ToolExecutor {
                     }
                 }
 
+                // GMGN safety gate — reject provably-dangerous tokens (honeypot,
+                // un-renounced mint/freeze authority, high rug_ratio) before
+                // committing funds. Only runs when a GMGN key is configured; a
+                // missing key or API error never blocks (get_token_security → None).
+                if crate::tools::gmgn::has_gmgn_api_key(config) {
+                    let base_mint = match args["base_mint"].as_str().filter(|m| !m.is_empty()) {
+                        Some(m) => Some(m.to_string()),
+                        None => crate::tools::meteora_native::pool_base_mint(config, pool_addr)
+                            .await
+                            .ok(),
+                    };
+                    if let Some(base_mint) = base_mint {
+                        if let Some(sec) =
+                            crate::tools::gmgn::get_token_security(&base_mint, config).await
+                        {
+                            if sec.is_honeypot {
+                                anyhow::bail!("GMGN: honeypot — skipping");
+                            }
+                            if !sec.renounced_mint {
+                                anyhow::bail!(
+                                    "GMGN: mint authority not renounced (infinite-mint rug risk) — skipping"
+                                );
+                            }
+                            if !sec.renounced_freeze {
+                                anyhow::bail!(
+                                    "GMGN: freeze authority not renounced (can freeze your tokens) — skipping"
+                                );
+                            }
+                            if sec.rug_ratio > 0.30 {
+                                anyhow::bail!(
+                                    "GMGN: rug_ratio {:.2} > 0.30 (high rug risk) — skipping",
+                                    sec.rug_ratio
+                                );
+                            }
+                            info(
+                                "executor",
+                                &format!(
+                                    "GMGN security OK — rug {:.2}, top10 {:.2}, snipers {:.0}",
+                                    sec.rug_ratio, sec.top_10_holder_rate, sec.sniper_count
+                                ),
+                            );
+                        }
+                    }
+                }
+
                 // On-chain dedup guard (LAST check — smallest race window).
                 // The tracked-state checks above can be bypassed if two screening
                 // cycles overlap (deploy #1 not yet saved when deploy #2 validates).
