@@ -692,8 +692,14 @@ impl ToolExecutor {
                         if let Some(sec) =
                             crate::tools::gmgn::get_token_security(&base_mint, config).await
                         {
-                            if sec.is_honeypot {
+                            if sec.honeypot {
                                 anyhow::bail!("GMGN: honeypot — skipping");
+                            }
+                            if sec.cannot_sell {
+                                anyhow::bail!("GMGN: token can't be sold (honeypot-like) — skipping");
+                            }
+                            if sec.blacklist {
+                                anyhow::bail!("GMGN: blacklist function present — skipping");
                             }
                             if !sec.renounced_mint {
                                 anyhow::bail!(
@@ -705,17 +711,11 @@ impl ToolExecutor {
                                     "GMGN: freeze authority not renounced (can freeze your tokens) — skipping"
                                 );
                             }
-                            if sec.rug_ratio > 0.30 {
-                                anyhow::bail!(
-                                    "GMGN: rug_ratio {:.2} > 0.30 (high rug risk) — skipping",
-                                    sec.rug_ratio
-                                );
-                            }
                             info(
                                 "executor",
                                 &format!(
-                                    "GMGN security OK — rug {:.2}, top10 {:.2}, snipers {:.0}",
-                                    sec.rug_ratio, sec.top_10_holder_rate, sec.sniper_count
+                                    "GMGN security OK — top10 {:.2}",
+                                    sec.top_10_holder_rate
                                 ),
                             );
                         }

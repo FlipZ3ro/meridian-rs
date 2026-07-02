@@ -208,17 +208,18 @@ pub async fn get_gmgn_token_fees(mint: &str, config: &Config) -> Option<GmgnToke
     }
 }
 
-/// Token security snapshot from GMGN's `/v1/token/security`. Booleans default
-/// to the SAFE value when a field is missing so a partial/absent response never
-/// hard-blocks a deploy — only explicit danger values gate.
+/// Token security snapshot from GMGN's `/v1/token/security`. Field names match
+/// the live response (honeypot/can_not_sell/blacklist are int 0/1; renounce
+/// flags are bool). Booleans default to the SAFE value when a field is missing
+/// so a partial/absent response never hard-blocks a deploy.
 #[derive(Debug, Clone)]
 pub struct TokenSecurity {
-    pub is_honeypot: bool,
+    pub honeypot: bool,
+    pub cannot_sell: bool,
+    pub blacklist: bool,
     pub renounced_mint: bool,
     pub renounced_freeze: bool,
-    pub rug_ratio: f64,
     pub top_10_holder_rate: f64,
-    pub sniper_count: f64,
 }
 
 /// Fetch GMGN token-security metrics for a mint. Returns `None` on missing key
@@ -238,8 +239,9 @@ pub async fn get_token_security(mint: &str, config: &Config) -> Option<TokenSecu
             if !info.is_object() {
                 return None;
             }
-            // Treat "yes"/true/1 as true; missing → the safe default per field.
-            let truthy = |k: &str, default_true: bool| -> bool {
+            // Accept bool, "yes"/"true"/"1", or a non-zero number as true;
+            // missing → the safe default for that field.
+            let flag = |k: &str, default: bool| -> bool {
                 match info.get(k) {
                     Some(Value::Bool(b)) => *b,
                     Some(Value::String(s)) => {
@@ -247,18 +249,18 @@ pub async fn get_token_security(mint: &str, config: &Config) -> Option<TokenSecu
                         s == "yes" || s == "true" || s == "1"
                     }
                     Some(Value::Number(n)) => n.as_f64().unwrap_or(0.0) != 0.0,
-                    _ => default_true,
+                    _ => default,
                 }
             };
             Some(TokenSecurity {
-                is_honeypot: truthy("is_honeypot", false),
-                // Mint/freeze authority: default TRUE (renounced) when absent so
-                // we don't block on a data gap; only an explicit false gates.
-                renounced_mint: truthy("renounced_mint", true),
-                renounced_freeze: truthy("renounced_freeze_account", true),
-                rug_ratio: info.get("rug_ratio").and_then(num).unwrap_or(0.0),
+                honeypot: flag("honeypot", false) || flag("is_honeypot", false),
+                cannot_sell: flag("can_not_sell", false),
+                blacklist: flag("blacklist", false) || flag("is_blacklist", false),
+                // Authority renounce: default TRUE when absent so a data gap
+                // doesn't block; only an explicit false gates.
+                renounced_mint: flag("renounced_mint", true),
+                renounced_freeze: flag("renounced_freeze_account", true),
                 top_10_holder_rate: info.get("top_10_holder_rate").and_then(num).unwrap_or(0.0),
-                sniper_count: info.get("sniper_count").and_then(num).unwrap_or(0.0),
             })
         }
         Err(e) => {
