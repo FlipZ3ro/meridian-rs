@@ -6,49 +6,101 @@
   <a href="https://www.rust-lang.org/"><img alt="Rust" src="https://img.shields.io/badge/Rust-2021-f97316?style=for-the-badge&logo=rust&logoColor=white"></a>
   <a href="https://solana.com/"><img alt="Solana" src="https://img.shields.io/badge/Solana-mainnet-14f195?style=for-the-badge&logo=solana&logoColor=06111f"></a>
   <img alt="Dry-run first" src="https://img.shields.io/badge/dry--run-first-22d3ee?style=for-the-badge">
-  <img alt="Web UI" src="https://img.shields.io/badge/Web_UI-HyperOS-a78bfa?style=for-the-badge">
+  <img alt="Telegram control" src="https://img.shields.io/badge/control-Telegram-2ca5e0?style=for-the-badge&logo=telegram&logoColor=white">
 </p>
 
-**Meridian RS** is a Rust rewrite of the Meridian DLMM liquidity agent for Meteora on Solana. It keeps the useful parts of the original Node.js agent, then moves execution, state, CLI tools, and the local control surface into one typed Rust binary.
-
-The repo is a completed parity port. Roadmap checkboxes are verified claims backed by focused tests, full Rust quality gates, and smoke checks.
+**Meridian RS** is a single Rust binary that runs an autonomous Meteora DLMM liquidity-provider agent on Solana. It screens memecoin pools, deploys single-sided SOL liquidity below market, manages positions through to exit, and is driven entirely from Telegram (plus a CLI / interactive REPL). One headless process — no web server, no frontend.
 
 ## What it does
 
-| Area | Status | Notes |
-| --- | --- | --- |
-| DLMM execution | Verified | Native Rust deploy, claim, close, and close + swap paths with dry-run guardrails. |
-| Operator control | Verified | CLI, interactive REPL, and local Web UI. Telegram is intentionally deferred. |
-| Screening | Verified | Discord signals, PVP/rival checks, launchpad filters, indicators, holder/audit enrichment, and reject reasons. |
-| Agent memory | Verified | Decision log, lessons, performance history, pool memory cooldowns, and strategy presets. |
-| Production ops | Verified | `.env.example`, startup checks, process lock, port checks, and deployment docs. |
-| Runtime polish | Verified | REPL `screen`/`manage`, readable logs, refreshed docs, and PnL poller close queues are wired. |
+| Area | Notes |
+| --- | --- |
+| DLMM execution | Native Rust deploy / claim / close / close+swap, single-sided SOL below market, Token-2022 support, dry-run guardrails. |
+| Screening | Meteora discovery filters + GMGN token-security gate (honeypot / blacklist / mint & freeze renounce) + Bollinger %B entry gate + volume-trend gate. |
+| Risk & exits | Always-on stop-loss, safety-exit on drawdown, min-duration gate, out-of-range close, and token-level repeat-loss cooldown. |
+| PnL & telemetry | Realtime realized + unrealized PnL sourced from Meteora; entry-signal snapshots persisted for the Darwin signal learner. |
+| Control | Telegram bot (`/status` `/positions` `/pnl` `/balance` `/candidates` `/start` `/stop` `/close`) with deploy & close alerts, plus CLI and REPL. |
+| State & memory | Positions, pool memory + cooldowns, lessons, performance history, and strategy presets under `~/.meridian`. |
 
-## Operator quickstart
+## Flow
+
+1. **Screen** — each cycle the agent pulls candidate pools from Meteora discovery, applies safety + quality gates (GMGN security, %B, volume trend), and picks the highest-conviction pool.
+2. **Deploy** — opens a single-sided SOL position below market across a wide bin range; entry signals are snapshotted for later learning.
+3. **Manage** — each cycle re-prices open positions: cut losses (stop-loss / safety-exit), bank take-profit, and close out-of-range or low-yield positions.
+4. **Close & recycle** — on close it swaps any leftover base token back to SOL and frees the slot; a repeat-losing token is cooled down so the bot stops re-entering it.
+5. **Control & watch** — you drive and monitor everything from Telegram while the loop runs headless.
+
+```mermaid
+flowchart LR
+    Operator[Operator] --> TG[Telegram bot]
+    Operator --> CLI[CLI / REPL]
+    TG --> Agent[ReAct agent loop]
+    CLI --> Agent
+    Agent --> Screen[Screening cycle]
+    Agent --> Manage[Management cycle]
+    Screen --> Filters[GMGN security + %B + volume trend]
+    Screen --> Memory[Pool memory + cooldowns]
+    Manage --> DLMM[Meteora DLMM adapter]
+    Manage --> Jupiter[Jupiter swap]
+    DLMM --> Solana[Solana RPC / Helius]
+    Jupiter --> Solana
+    Agent --> State[(~/.meridian state)]
+    State --> Agent
+```
+
+## Installation
 
 ```bash
 # 1. Clone and enter the repo
 git clone https://github.com/FlipZ3ro/meridian-rs.git
 cd meridian-rs
 
-# 2. Create local config and secrets templates
+# 2. Generate local config + secrets templates
 cargo run -- setup --dir .
 
-# 3. Fill wallet, RPC, and LLM keys. Keep DRY_RUN=true while testing.
+# 3. Fill wallet, RPC, LLM, Telegram, and GMGN keys. Keep DRY_RUN=true while testing.
 $EDITOR .env
 $EDITOR user-config.json
 
-# 4. Run the local agent + Web UI
-cargo run
+# 4. Build the release binary
+cargo build --release
+
+# 5. Run the agent (headless bot + Telegram control)
+./target/release/meridian-rs
 ```
 
-Web UI default: `http://localhost:3000`.
+Running the binary with **no subcommand** starts the long-running agent (screening + management cycles) and the Telegram control loop. Pass a subcommand for one-shot JSON output (see [Command center](#command-center)).
 
-For production-style runs, prefer `~/.meridian/.env`, `MERIDIAN_DATA_DIR`, `MERIDIAN_LOCK_PATH`, and non-public Web UI binding such as `MERIDIAN_WEB_ADDR=127.0.0.1:3000`.
+For production, prefer `~/.meridian/.env`, set `MERIDIAN_DATA_DIR` / `MERIDIAN_LOCK_PATH`, and run under systemd or PM2.
+
+### Telegram control
+
+Create a bot with [@BotFather](https://t.me/BotFather), get your chat id (e.g. via [@userinfobot](https://t.me/userinfobot)), then set:
+
+```dotenv
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_CHAT_ID=...
+```
+
+Only that one chat can command the bot. Commands:
+
+```text
+/status       agent state + open positions
+/positions    open positions detail
+/pnl          portfolio PnL (realized + unrealized)
+/balance      wallet SOL balance
+/candidates   top screening candidates
+/start        resume trading (new deploys)
+/stop         pause new deploys (open positions still managed)
+/close <x>    close a position
+/help         list commands
+```
+
+Deploy and close events are pushed to the chat automatically.
 
 ## Command center
 
-Use one-shot commands when you want JSON output and a clean exit. Run without a subcommand to start the long-running runtime.
+One-shot commands print JSON and exit; run with no subcommand for the runtime.
 
 ```bash
 # Runtime / setup
@@ -65,8 +117,8 @@ cargo run -- pnl --pool <pool> --position <position> --wallet <wallet>
 cargo run -- candidates --limit 3
 cargo run -- study --pool <pool> --limit 4
 
-# Trading actions, all protected by config dry-run unless intentionally live
-cargo run -- deploy --pool <pool> --amount <sol> --bins-below 35 --bins-above 0 --strategy spot --dry-run
+# Trading actions (dry-run unless intentionally live)
+cargo run -- deploy --pool <pool> --amount <sol> --bins-below 25 --bins-above 0 --strategy spot --dry-run
 cargo run -- claim --position <position>
 cargo run -- close --position <position> --reason "low yield" --skip-swap
 cargo run -- swap --from <mint> --amount <tokens>
@@ -83,7 +135,7 @@ cargo run -- discord-signals
 cargo run -- strategies list
 ```
 
-Interactive terminal mode supports:
+Interactive terminal mode:
 
 ```text
 status   show position state summary
@@ -94,70 +146,53 @@ quit     graceful shutdown
 
 ## Readable logs
 
-Pretty operator logs are the default. Set `MERIDIAN_LOG_STYLE=pretty` explicitly if you want to pin the style, or `MERIDIAN_LOG_STYLE=plain` if a log shipper needs the older bracketed format.
+Pretty operator logs are the default. Set `MERIDIAN_LOG_STYLE=plain` if a log shipper needs the older bracketed format.
 
 ```text
-2026-06-09 10:00:00  ● INFO   main         │ Meridian RS -- DLMM Liquidity Provider Agent v0.2.0
-2026-06-09 10:00:01  ● INFO   startup      │ 127.0.0.1:3000 is available
-2026-06-09 10:00:02  ▲ WARN   startup      │ missing WALLET_PRIVATE_KEY or MERIDIAN_WALLET_PRIVATE_KEY; live deploy/claim/close/swap cannot sign
-2026-06-09 10:00:03  ✖ ERROR  rpc          │ RPC request failed
+2026-07-01 10:00:00  ● INFO   main      │ Meridian RS -- DLMM Liquidity Provider Agent
+2026-07-01 10:00:01  ● INFO   telegram  │ interactive control online
+2026-07-01 10:00:02  ● INFO   screen    │ Screening Cycle Starting
+2026-07-01 10:00:03  ● INFO   executor  │ GMGN security OK — top10 0.15
 ```
 
-The log shape is intentionally simple: timestamp, level icon, level, module, and message. It is easy to scan in a terminal and still grep-friendly.
-
-## System map
-
-```mermaid
-flowchart LR
-    Operator[Operator] --> Web[Web UI]
-    Operator --> CLI[CLI / REPL]
-    Web --> Agent[ReAct agent loop]
-    CLI --> Agent
-    Agent --> Screen[Screening cycle]
-    Agent --> Manage[Management cycle]
-    Screen --> Signals[Discord signals + filters]
-    Screen --> Memory[Pool memory + lessons]
-    Manage --> DLMM[Meteora DLMM adapter]
-    Manage --> Jupiter[Jupiter swap]
-    DLMM --> Solana[Solana RPC / Helius]
-    Jupiter --> Solana
-    Agent --> State[(~/.meridian state)]
-    State --> Agent
-```
+Timestamp, level icon, level, module, message — easy to scan in a terminal and still grep-friendly.
 
 ## Project structure
 
 ```text
 src/
-├── main.rs              # runtime, scheduler, REPL, health, Web UI startup
+├── main.rs              # runtime, scheduler, REPL, health, Telegram spawn
 ├── cli.rs               # one-shot commands and JSON envelopes
 ├── cycle.rs             # management, screening, and PnL polling cycles
 ├── config/              # config loader, env alias mapping, defaults
-├── tools/               # DLMM, wallet, screening, executor, integrations
+├── tools/               # DLMM, wallet, screening, executor, gmgn, telegram_bot
 ├── agent/               # ReAct loop, roles, prompt context
 ├── state/               # positions and pool memory
-├── web.rs               # HyperOS-style local Web UI
 └── utils/               # logger, math, time helpers
 ```
 
 ## Config
 
-Copy `user-config.example.json` to `user-config.json` and `.env.example` to `.env` for local development, or to `~/.meridian/.env` for the default runtime profile.
+Copy `user-config.example.json` → `user-config.json` and `.env.example` → `.env` (or `~/.meridian/.env` for the default runtime profile).
 
-Minimum useful env values:
+Minimum useful env:
 
 ```dotenv
 DRY_RUN=true
 WALLET_PRIVATE_KEY=
 MERIDIAN_WALLET=
 RPC_URL=https://api.mainnet-beta.solana.com
+HELIUS_RPC_URL=
 LLM_BASE_URL=https://openrouter.ai/api/v1
 OPENROUTER_API_KEY=
 LLM_MODEL=openai/gpt-4o-mini
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+GMGN_API_KEY=
 MERIDIAN_LOG_STYLE=pretty
 ```
 
-Supported aliases from the original Node.js project include `RPC_URL`, `HELIUS_RPC_URL`, `HELIUS_API_KEY`, `OPENROUTER_API_KEY`, `LLM_API_KEY`, `LLM_MODEL`, `MANAGEMENT_MODEL`, `SCREENING_MODEL`, `GENERAL_MODEL`, `JUPITER_API_KEY`, `PUBLIC_API_KEY`, `LPAGENT_API_KEY`, and the legacy Telegram keys.
+Supported aliases from the original project include `RPC_URL`, `HELIUS_RPC_URL`, `HELIUS_API_KEY`, `OPENROUTER_API_KEY`, `LLM_API_KEY`, `LLM_MODEL`, `MANAGEMENT_MODEL`, `SCREENING_MODEL`, `GENERAL_MODEL`, `JUPITER_API_KEY`, `GMGN_API_KEY`, `TELEGRAM_BOT_TOKEN`, and `TELEGRAM_CHAT_ID`.
 
 Never commit real `user-config.json`, `.env`, wallet private keys, or API keys.
 
@@ -178,7 +213,6 @@ Overrides:
 ```bash
 MERIDIAN_DATA_DIR=/path/to/data
 MERIDIAN_STATE_PATH=/path/to/meridian-state.json
-MERIDIAN_WEB_ADDR=127.0.0.1:3000
 HEALTH_PORT=8080
 MERIDIAN_LOCK_PATH=/path/to/meridian.lock
 ```
@@ -187,98 +221,8 @@ MERIDIAN_LOCK_PATH=/path/to/meridian.lock
 
 - [`docs/agent-meridian-relay.md`](docs/agent-meridian-relay.md): Agent Meridian / LPAgent relay replacement notes.
 - [`docs/discord-signals.md`](docs/discord-signals.md): Discord signal queue and pre-check behavior.
-- [`docs/pvp-risk.md`](docs/pvp-risk.md): PVP/rival-pool detection policy.
-- [`docs/production-operations.md`](docs/production-operations.md): encrypted env options, launchd/systemd/PM2, startup checks, process lock, and operator replacements.
-
-## JS Meridian parity roadmap
-
-Reference target: [`yunus-0x/meridian`](https://github.com/yunus-0x/meridian)
-
-### Phase 0: baseline Rust skeleton and verification
-
-- [x] Rust project boots with `cargo run`
-- [x] Config loader with sane defaults
-- [x] LLM client and ReAct-style loop skeleton
-- [x] Screening and management cycle modules exist
-- [x] Basic Web UI and health/status endpoints exist
-- [x] Baseline quality gates pass: `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test`
-
-### Phase 1: runtime/config compatibility foundation
-
-- [x] Nested Rust `user-config.json` format loads successfully
-- [x] Missing nested `strategy` defaults correctly for older Rust configs
-- [x] Original JS flat `user-config.json` format loads successfully
-- [x] Original `.env` keys map into Rust runtime consistently
-- [x] Dry-run mode is first-class and blocks all transaction submission
-- [x] Runtime state files are isolated and documented
-
-### Phase 2: core trading parity
-
-- [x] Wallet private key loading and Solana transaction signing
-- [x] Rust base64 transaction signer supports versioned and legacy Solana transactions
-- [x] Real Meteora DLMM deploy position flow
-- [x] Real claim fees flow
-- [x] Real close position flow
-- [x] Real close + optional swap-to-SOL flow
-- [x] Jupiter swap signing/submission parity
-- [x] Agent Meridian relay transaction signing adapter for zap-in/zap-out order responses
-- [x] Meteora Rust SDK compatibility spike validates native claim/close/deploy adapter path
-- [x] Agent Meridian / LPAgent relay support or documented replacement
-- [x] Regression tests for dry-run vs live execution guardrails
-
-### Phase 3: CLI and setup parity
-
-- [x] `meridian` CLI using Rust subcommands
-- [x] `setup` wizard generating `.env` and `user-config.json`
-- [x] JSON output parity for `balance`, `positions`, `pnl`, `candidates`, `deploy`, `claim`, `close`, `swap`
-- [x] One-shot `screen` and `manage` commands
-- [x] `config get/set`
-- [x] `lessons`, `performance`, `evolve`, `pool-memory`, `blacklist` commands
-
-### Phase 4: agent intelligence parity
-
-- [x] Structured `decision-log.json`
-- [x] `get_recent_decisions` tool and prompt injection
-- [x] Rich lessons/performance history
-- [x] Darwin signal weighting and threshold evolution
-- [x] Strategy library with active strategy presets
-- [x] Study top LPers / behavior-pattern analysis
-- [x] Pool memory cooldown logic matching original behavior
-
-### Phase 5: screening enrichment parity
-
-- [x] Discord signal queue and pre-check pipeline
-- [x] PVP/rival-pool risk detection
-- [x] Launchpad allow/block filters
-- [x] Timeframe-scaled screening thresholds
-- [x] Chart indicator presets for entry/exit confirmation
-- [x] Token audit, holder, smart-wallet, narrative enrichment parity
-- [x] Detailed reject reasons for filtered candidates
-
-### Phase 6: control surface parity
-
-- [x] Web UI replaces Telegram control surface for local usage
-- [x] Live positions, balances, candidates, cycle logs, and decisions in Web UI
-- [x] Manual screen/manage/deploy/claim/close controls in Web UI
-- [x] Config editor in Web UI
-- [x] Lessons/performance/blacklist views in Web UI
-- [x] Optional Telegram notifications/commands intentionally deferred; Web UI is the supported replacement control surface
-
-### Phase 7: production operations parity
-
-- [x] `.env.example` parity with original project
-- [x] Encrypted env flow or documented alternative
-- [x] launchd/systemd/PM2-equivalent deployment guide
-- [x] Startup checks for repo/cwd/config/wallet/API keys
-- [x] Duplicate process and port conflict guards
-- [x] Claude Code slash-command compatibility or Rust-native replacement
-- [x] HiveMind/shared lessons support or documented replacement
-
-### Phase 8: runtime operator polish
-
-- [x] Interactive REPL `screen`/`manage` commands execute the real one-shot cycles and print JSON output
-- [x] README visual refresh and readable command/log output
-- [x] PnL poller exit signals dispatch or queue close actions through the guarded close flow
+- [`docs/pvp-risk.md`](docs/pvp-risk.md): PVP / rival-pool detection policy.
+- [`docs/production-operations.md`](docs/production-operations.md): env options, systemd / PM2, startup checks, and process lock.
 
 ## License
 
