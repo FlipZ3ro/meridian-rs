@@ -159,28 +159,60 @@ async fn handle(
         "pnl" => portfolio_text(config).await,
         "status" => {
             let flag = if trading_enabled.load(Ordering::SeqCst) {
-                "▶️ trading ENABLED"
+                "▶️ Trading ENABLED"
             } else {
-                "⏸️ trading PAUSED"
+                "⏸️ Trading PAUSED"
             };
-            let base = run_cli("status", &[], config, state_path).await;
-            format!("{flag}\n{base}")
+            match run_json("status", &[], config, state_path).await {
+                Ok(v) => {
+                    let summary = v
+                        .get("summary")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .replace(" | ", "\n");
+                    format!("{flag}\n\n{summary}")
+                }
+                Err(e) => format!("⚠️ {e}"),
+            }
         }
-        "positions" => run_cli("positions", &[], config, state_path).await,
-        "balance" => run_cli("balance", &[], config, state_path).await,
+        "balance" => match run_json("balance", &[], config, state_path).await {
+            Ok(v) => fmt_balance(&v),
+            Err(e) => format!("⚠️ {e}"),
+        },
+        "positions" => match run_json("positions", &[], config, state_path).await {
+            Ok(v) => fmt_positions(&v),
+            Err(e) => format!("⚠️ {e}"),
+        },
         "candidates" => {
             let lim = rest.first().cloned().unwrap_or_else(|| "8".to_string());
-            run_cli("candidates", &["--limit".to_string(), lim], config, state_path).await
+            match run_json("candidates", &["--limit".to_string(), lim], config, state_path).await
+            {
+                Ok(v) => fmt_candidates(&v),
+                Err(e) => format!("⚠️ {e}"),
+            }
         }
         "close" => match rest.first() {
             Some(target) => {
-                run_cli(
+                match run_json(
                     "close",
                     &["--position".to_string(), target.clone()],
                     config,
                     state_path,
                 )
                 .await
+                {
+                    Ok(v) => {
+                        if v.get("success").and_then(Value::as_bool).unwrap_or(false) {
+                            format!("✅ Close submitted for {}", short(target))
+                        } else {
+                            format!(
+                                "⚠️ Close failed: {}",
+                                v.get("error").and_then(Value::as_str).unwrap_or("unknown")
+                            )
+                        }
+                    }
+                    Err(e) => format!("⚠️ {e}"),
+                }
             }
             None => "Usage: /close <pool_or_position_address>".to_string(),
         },
@@ -188,26 +220,128 @@ async fn handle(
     }
 }
 
-/// Run a CLI command by reusing the argv parser (args[0] is a placeholder).
-async fn run_cli(cmd: &str, tail: &[String], config: &Config, state_path: &str) -> String {
+/// Run a CLI command via the argv parser and return its raw JSON value.
+async fn run_json(
+    cmd: &str,
+    tail: &[String],
+    config: &Config,
+    state_path: &str,
+) -> Result<Value, String> {
     let mut args = vec!["meridian".to_string(), cmd.to_string()];
     args.extend_from_slice(tail);
     match parse_cli_args(&args) {
         Ok(Some(command)) => match run_cli_command(command, config, state_path).await {
-            Ok(out) => render(out),
-            Err(e) => format!("⚠️ {cmd} failed: {e}"),
+            Ok(CliOutput::Json(v)) => Ok(v),
+            Ok(CliOutput::Text(t)) => Ok(serde_json::json!({ "text": t })),
+            Err(e) => Err(format!("{cmd} failed: {e}")),
         },
-        Ok(None) => format!("⚠️ could not parse /{cmd}"),
-        Err(e) => format!("⚠️ parse error: {e}"),
+        Ok(None) => Err(format!("could not parse /{cmd}")),
+        Err(e) => Err(format!("parse error: {e}")),
     }
 }
 
-fn render(out: CliOutput) -> String {
-    let s = match out {
-        CliOutput::Text(t) => t,
-        CliOutput::Json(v) => serde_json::to_string_pretty(&v).unwrap_or_default(),
-    };
-    truncate(&s)
+// ── Output formatters (clean Telegram text instead of raw JSON) ──────
+
+/// Compact number: 8326 → "8.3K", 30458 → "30.5K".
+fn compact(n: f64) -> String {
+    let a = n.abs();
+    if a >= 1e9 {
+        format!("{:.1}B", n / 1e9)
+    } else if a >= 1e6 {
+        format!("{:.1}M", n / 1e6)
+    } else if a >= 1e3 {
+        format!("{:.1}K", n / 1e3)
+    } else {
+        format!("{:.0}", n)
+    }
+}
+
+/// Shorten a long address to `abcd…wxyz`.
+fn short(s: &str) -> String {
+    if s.len() > 12 {
+        format!("{}…{}", &s[..4], &s[s.len() - 4..])
+    } else {
+        s.to_string()
+    }
+}
+
+fn numf(v: &Value, key: &str) -> f64 {
+    v.get(key).and_then(Value::as_f64).unwrap_or(0.0)
+}
+
+fn fmt_balance(v: &Value) -> String {
+    let d = v.get("data").unwrap_or(v);
+    let sol = numf(d, "sol");
+    let usd = numf(d, "totalUsd");
+    if usd > 0.0 {
+        format!("💰 Wallet\n◎ {sol:.4} SOL  (~${usd:.2})")
+    } else {
+        format!("💰 Wallet\n◎ {sol:.4} SOL")
+    }
+}
+
+fn fmt_positions(v: &Value) -> String {
+    let empty = Vec::new();
+    let list = v
+        .get("data")
+        .and_then(|d| d.get("positions"))
+        .and_then(Value::as_array)
+        .unwrap_or(&empty);
+    if list.is_empty() {
+        return "📊 No open positions.".to_string();
+    }
+    let mut out = format!("📊 Open positions ({})", list.len());
+    for p in list {
+        let name = p
+            .get("pool_name")
+            .and_then(Value::as_str)
+            .or_else(|| p.get("base_symbol").and_then(Value::as_str))
+            .unwrap_or("?");
+        let liq = p
+            .get("liquidity_sol")
+            .and_then(Value::as_f64)
+            .unwrap_or_else(|| numf(p, "amount_sol"));
+        let pnl = p.get("live_pnl_pct").and_then(Value::as_f64).unwrap_or(0.0);
+        let range = if p.get("in_range").and_then(Value::as_bool).unwrap_or(true) {
+            "in-range"
+        } else {
+            "OUT"
+        };
+        out.push_str(&format!("\n\n{name}\n  ◎{liq:.3} · PnL {pnl:+.2}% · {range}"));
+    }
+    out
+}
+
+fn fmt_candidates(v: &Value) -> String {
+    let empty = Vec::new();
+    let list = v
+        .get("data")
+        .and_then(|d| d.get("candidates"))
+        .and_then(Value::as_array)
+        .unwrap_or(&empty);
+    if list.is_empty() {
+        return "🎯 No candidates right now.".to_string();
+    }
+    let mut out = format!("🎯 Candidates ({})", list.len());
+    for (i, c) in list.iter().enumerate().take(12) {
+        let name = c
+            .get("name")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                c.get("base")
+                    .and_then(|b| b.get("symbol"))
+                    .and_then(Value::as_str)
+            })
+            .unwrap_or("?");
+        out.push_str(&format!(
+            "\n{}. {name} · score {} · TVL ${} · fees ◎{}",
+            i + 1,
+            compact(numf(c, "score")),
+            compact(numf(c, "tvl")),
+            compact(numf(c, "fees_sol")),
+        ));
+    }
+    out
 }
 
 /// Char-safe truncation to stay under Telegram's message limit.
