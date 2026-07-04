@@ -58,6 +58,7 @@ pub async fn run(config: Config, state_path: String, trading_enabled: Arc<Atomic
     };
 
     let client = reqwest::Client::new();
+    set_commands(&client, &token).await;
     let _ =
         crate::tools::telegram::send_message_safe(&token, &admin, "🤖 Meridian control online — /help")
             .await;
@@ -106,6 +107,28 @@ pub async fn run(config: Config, state_path: String, trading_enabled: Arc<Atomic
                 tokio::time::sleep(Duration::from_secs(5)).await;
             }
         }
+    }
+}
+
+/// Register the bot's command menu (the "Menu" button / `/` list shown at the
+/// bottom of the chat). `/start` is intentionally omitted — it stays usable if
+/// typed, but doesn't clutter the menu.
+async fn set_commands(client: &reqwest::Client, token: &str) {
+    let body = serde_json::json!({
+        "commands": [
+            { "command": "status",     "description": "Agent state + open positions" },
+            { "command": "positions",  "description": "Open positions detail" },
+            { "command": "pnl",        "description": "Portfolio PnL (realized + unrealized)" },
+            { "command": "balance",    "description": "Wallet SOL balance" },
+            { "command": "candidates", "description": "Top screening candidates" },
+            { "command": "stop",       "description": "Pause new deploys" },
+            { "command": "close",      "description": "Close a position" },
+            { "command": "help",       "description": "List commands" }
+        ]
+    });
+    let url = format!("{TG_API}/bot{token}/setMyCommands");
+    if let Err(e) = client.post(&url).json(&body).send().await {
+        warn("telegram", &format!("setMyCommands failed: {e}"));
     }
 }
 
