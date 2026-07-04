@@ -26,6 +26,7 @@ const HELP: &str = "🤖 *Meridian control*\n\
 /candidates [n] — top screening candidates\n\
 /start — resume trading (new deploys)\n\
 /stop — pause new deploys (still manages open)\n\
+/dryrun [on|off] — toggle simulated vs live execution\n\
 /close <pool|position> — close a position\n\
 /help — this message";
 
@@ -125,6 +126,7 @@ async fn set_commands(client: &reqwest::Client, token: &str) {
             { "command": "pnl",        "description": "Portfolio PnL (realized + unrealized)" },
             { "command": "balance",    "description": "Wallet SOL balance" },
             { "command": "candidates", "description": "Top screening candidates" },
+            { "command": "dryrun",     "description": "Toggle simulated vs live execution" },
             { "command": "stop",       "description": "Pause new deploys" },
             { "command": "close",      "description": "Close a position" },
             { "command": "help",       "description": "List commands" }
@@ -143,8 +145,8 @@ fn keyboard() -> Value {
         "keyboard": [
             [{ "text": "📊 Status" }, { "text": "📋 Positions" }],
             [{ "text": "📈 PnL" }, { "text": "💰 Balance" }],
-            [{ "text": "🎯 Candidates" }, { "text": "⏸️ Stop" }],
-            [{ "text": "❓ Help" }]
+            [{ "text": "🎯 Candidates" }, { "text": "🧪 Dry-run" }],
+            [{ "text": "⏸️ Stop" }, { "text": "❓ Help" }]
         ],
         "resize_keyboard": true,
         "is_persistent": true
@@ -197,6 +199,7 @@ async fn handle(
         "📈 PnL" => "/pnl",
         "💰 Balance" => "/balance",
         "🎯 Candidates" => "/candidates",
+        "🧪 Dry-run" => "/dryrun",
         "⏸️ Stop" => "/stop",
         "❓ Help" => "/help",
         other => other,
@@ -216,11 +219,28 @@ async fn handle(
         "" | "help" => HELP.to_string(),
         "start" => {
             trading_enabled.store(true, Ordering::SeqCst);
-            "▶️ Trading ENABLED — bot will deploy on valid candidates.".to_string()
+            format!(
+                "▶️ Trading ENABLED · {} — bot will deploy on valid candidates.",
+                mode_label(config)
+            )
         }
         "stop" => {
             trading_enabled.store(false, Ordering::SeqCst);
             "⏸️ Trading PAUSED — no new deploys. Open positions still managed & closed.".to_string()
+        }
+        "dryrun" | "dry" => {
+            let target = match rest.first().map(|s| s.to_lowercase()).as_deref() {
+                Some("on" | "true" | "1") => true,
+                Some("off" | "false" | "0") => false,
+                _ => !crate::tools::dlmm::is_dry_run(config), // no arg → toggle
+            };
+            std::env::set_var("DRY_RUN", if target { "true" } else { "false" });
+            if target {
+                "🧪 DRY-RUN ON — deploys are simulated, no real transactions.".to_string()
+            } else {
+                "🔴 LIVE MODE — real transactions will be sent!\nUse /dryrun on to return to simulation."
+                    .to_string()
+            }
         }
         "pnl" => portfolio_text(config).await,
         "status" => {
@@ -236,7 +256,7 @@ async fn handle(
                         .and_then(Value::as_str)
                         .unwrap_or("")
                         .replace(" | ", "\n");
-                    format!("{flag}\n\n{summary}")
+                    format!("{flag} · {}\n\n{summary}", mode_label(config))
                 }
                 Err(e) => format!("⚠️ {e}"),
             }
@@ -333,6 +353,15 @@ fn short(s: &str) -> String {
 
 fn numf(v: &Value, key: &str) -> f64 {
     v.get(key).and_then(Value::as_f64).unwrap_or(0.0)
+}
+
+/// Current execution mode label for status/start messages.
+fn mode_label(config: &Config) -> &'static str {
+    if crate::tools::dlmm::is_dry_run(config) {
+        "🧪 DRY-RUN"
+    } else {
+        "🔴 LIVE"
+    }
 }
 
 fn fmt_balance(v: &Value) -> String {

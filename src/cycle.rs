@@ -583,7 +583,7 @@ pub async fn run_screening_cycle(
 
     let mut deploy_amount = compute_deploy_amount(config, wallet_sol);
     if deploy_amount <= 0.0 {
-        if config.dry_run {
+        if crate::tools::dlmm::is_dry_run(config) {
             // Dry-run does not require real balance: simulate with the configured
             // deploy size so the full screen → decide → simulated-deploy flow runs.
             // The deploy transaction itself stays blocked by the dry-run guard.

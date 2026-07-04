@@ -10,8 +10,17 @@ fn meridian_cli() -> String {
     std::env::var("MERIDIAN_CLI").unwrap_or_else(|_| "/root/meridian/cli.js".to_string())
 }
 
-fn is_dry_run(config: &Config) -> bool {
-    config.dry_run || std::env::var("DRY_RUN").ok().as_deref() == Some("true")
+/// Whether deploys/closes should be simulated instead of broadcast.
+///
+/// The `DRY_RUN` env var is the runtime source of truth — it's seeded from
+/// config at startup and can be flipped at runtime (e.g. via the Telegram
+/// `/dryrun` toggle), so this reads it fresh each call. Falls back to the
+/// config value only when the env var is unset.
+pub fn is_dry_run(config: &Config) -> bool {
+    match std::env::var("DRY_RUN") {
+        Ok(v) => v.eq_ignore_ascii_case("true") || v == "1",
+        Err(_) => config.dry_run,
+    }
 }
 
 /// Execute a Meridian JS CLI command and parse JSON output.

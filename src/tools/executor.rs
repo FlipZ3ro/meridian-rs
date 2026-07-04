@@ -1199,7 +1199,7 @@ impl ToolExecutor {
                         let needed = config.management.deploy_amount_sol
                             + config.management.gas_reserve
                             + 0.5;
-                        if config.dry_run && balances.sol < needed {
+                        if crate::tools::dlmm::is_dry_run(config) && balances.sol < needed {
                             let simulated = needed.max(1.0);
                             balances.sol = simulated;
                             balances.sol_usd = simulated * balances.sol_price;
@@ -1775,7 +1775,7 @@ impl ToolExecutor {
                             }
                         }
 
-                        if config.dry_run
+                        if crate::tools::dlmm::is_dry_run(config)
                             && result
                                 .note
                                 .as_deref()
@@ -1874,7 +1874,7 @@ impl ToolExecutor {
                         // positions invisible to the dashboard for the rest of
                         // the cycle (while the activity log already showed the
                         // deploy from the per-tool decision log).
-                        if result.success || config.dry_run {
+                        if result.success || crate::tools::dlmm::is_dry_run(config) {
                             let state_path =
                                 std::env::var("MERIDIAN_STATE_PATH").unwrap_or_else(|_| {
                                     meridian_data_path("meridian-state.json")
