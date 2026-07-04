@@ -48,6 +48,42 @@ flowchart LR
     State --> Agent
 ```
 
+## Prerequisites
+
+New to Rust or Solana? Install these first (Linux / macOS shown; on Windows use [WSL2](https://learn.microsoft.com/windows/wsl/install) and follow the same steps).
+
+**1. Rust** — via [rustup](https://rustup.rs):
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"          # add cargo to PATH for this shell
+rustc --version                    # verify, e.g. rustc 1.85.0
+```
+
+`rustup` installs `cargo` (the build tool) into `~/.cargo/bin`. If a new terminal can't find `cargo`, add `source "$HOME/.cargo/env"` to your `~/.bashrc` / `~/.zshrc`.
+
+**2. Solana CLI** — for creating/managing the wallet keypair:
+
+```bash
+sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+# then add it to PATH (the installer prints the exact line):
+export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+solana --version                   # verify
+```
+
+Add that `export PATH=...` line to your `~/.bashrc` / `~/.zshrc` so it persists across terminals.
+
+**3. Wallet keypair** — create one (or use an existing keypair file):
+
+```bash
+solana-keygen new --outfile ~/.config/solana/meridian.json
+solana-keygen pubkey ~/.config/solana/meridian.json   # your wallet address
+```
+
+Keep the **keypair file path private** — never paste the private key into config or chat. Meridian reads the wallet from `MERIDIAN_WALLET` (the public address) plus `WALLET_PRIVATE_KEY` for signing; you can point the bot at the keypair file instead of pasting the raw key. Fund this wallet with SOL before running live.
+
+> Build tip: on Linux you may also need `build-essential`, `pkg-config`, and `libssl-dev` (`sudo apt install build-essential pkg-config libssl-dev`).
+
 ## Installation
 
 ```bash
