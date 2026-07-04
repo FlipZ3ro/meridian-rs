@@ -59,9 +59,13 @@ pub async fn run(config: Config, state_path: String, trading_enabled: Arc<Atomic
 
     let client = reqwest::Client::new();
     set_commands(&client, &token).await;
-    let _ =
-        crate::tools::telegram::send_message_safe(&token, &admin, "🤖 Meridian control online — /help")
-            .await;
+    send_keyboard(
+        &client,
+        &token,
+        &admin,
+        "🤖 Meridian control online — tap a button below or /help",
+    )
+    .await;
     info("telegram", "interactive control online");
 
     let mut offset: i64 = 0;
@@ -132,6 +136,34 @@ async fn set_commands(client: &reqwest::Client, token: &str) {
     }
 }
 
+/// Persistent reply keyboard shown below the chat input — tap a button to run
+/// the command. `/start` is intentionally not a button.
+fn keyboard() -> Value {
+    serde_json::json!({
+        "keyboard": [
+            [{ "text": "📊 Status" }, { "text": "📋 Positions" }],
+            [{ "text": "📈 PnL" }, { "text": "💰 Balance" }],
+            [{ "text": "🎯 Candidates" }, { "text": "⏸️ Stop" }],
+            [{ "text": "❓ Help" }]
+        ],
+        "resize_keyboard": true,
+        "is_persistent": true
+    })
+}
+
+/// Send a message that also (re)attaches the persistent reply keyboard.
+async fn send_keyboard(client: &reqwest::Client, token: &str, chat: &str, text: &str) {
+    let url = format!("{TG_API}/bot{token}/sendMessage");
+    let body = serde_json::json!({
+        "chat_id": chat,
+        "text": text,
+        "reply_markup": keyboard(),
+    });
+    if let Err(e) = client.post(&url).json(&body).send().await {
+        warn("telegram", &format!("sendMessage(keyboard) failed: {e}"));
+    }
+}
+
 async fn get_updates(
     client: &reqwest::Client,
     token: &str,
@@ -158,7 +190,18 @@ async fn handle(
     state_path: &str,
     trading_enabled: &Arc<AtomicBool>,
 ) -> String {
-    let mut it = text.trim().split_whitespace();
+    // Map reply-keyboard button labels to their command.
+    let mapped = match text.trim() {
+        "📊 Status" => "/status",
+        "📋 Positions" => "/positions",
+        "📈 PnL" => "/pnl",
+        "💰 Balance" => "/balance",
+        "🎯 Candidates" => "/candidates",
+        "⏸️ Stop" => "/stop",
+        "❓ Help" => "/help",
+        other => other,
+    };
+    let mut it = mapped.trim().split_whitespace();
     let raw = it.next().unwrap_or("");
     // strip leading '/' and any '@botname' suffix
     let cmd = raw
