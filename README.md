@@ -215,12 +215,18 @@ src/
 
 Copy `user-config.example.json` → `user-config.json` and `.env.example` → `.env` (or `~/.meridian/.env` for the default runtime profile).
 
+**Wallet** — you only need one. Point `WALLET_PRIVATE_KEY` at the Solana CLI keypair **file** you created in [Prerequisites](#prerequisites) — the raw private key never goes into config. `MERIDIAN_WALLET` (the public address) is optional and auto-derived from that keypair.
+
 Minimum useful env:
 
 ```dotenv
 DRY_RUN=true
-WALLET_PRIVATE_KEY=
-MERIDIAN_WALLET=
+
+# Path to your Solana CLI keypair file (recommended). Also accepts a raw
+# base58 key or a [1,2,3,...] byte array. Use forward slashes on Windows.
+WALLET_PRIVATE_KEY=/home/you/.config/solana/meridian.json
+MERIDIAN_WALLET=                 # optional — auto-derived from the keypair
+
 RPC_URL=https://api.mainnet-beta.solana.com
 HELIUS_RPC_URL=
 LLM_BASE_URL=https://openrouter.ai/api/v1
