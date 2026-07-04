@@ -270,10 +270,7 @@ async fn handle(
             Ok(v) => fmt_balance(&v),
             Err(e) => format!("⚠️ {e}"),
         },
-        "positions" => match run_json("positions", &[], config, state_path).await {
-            Ok(v) => fmt_positions(&v),
-            Err(e) => format!("⚠️ {e}"),
-        },
+        "positions" => fmt_state_positions(state_path),
         "candidates" => {
             let lim = rest.first().cloned().unwrap_or_else(|| "8".to_string());
             match run_json("candidates", &["--limit".to_string(), lim], config, state_path).await
@@ -380,34 +377,35 @@ fn fmt_balance(v: &Value) -> String {
     }
 }
 
-fn fmt_positions(v: &Value) -> String {
-    let empty = Vec::new();
-    let list = v
-        .get("data")
-        .and_then(|d| d.get("positions"))
-        .and_then(Value::as_array)
-        .unwrap_or(&empty);
-    if list.is_empty() {
+/// Open positions from the bot's TRACKED state (works for real AND dry-run,
+/// since dry-run positions never exist on-chain). Marks simulated ones with 🧪.
+fn fmt_state_positions(state_path: &str) -> String {
+    use crate::state::positions::{PositionState, PositionStatus};
+    let state = match PositionState::load(state_path) {
+        Ok(s) => s,
+        Err(e) => return format!("⚠️ could not read state: {e}"),
+    };
+    let active = state.get_active();
+    if active.is_empty() {
         return "📊 No open positions.".to_string();
     }
-    let mut out = format!("📊 Open positions ({})", list.len());
-    for p in list {
+    let mut out = format!("📊 Open positions ({})", active.len());
+    for p in active {
         let name = p
-            .get("pool_name")
-            .and_then(Value::as_str)
-            .or_else(|| p.get("base_symbol").and_then(Value::as_str))
-            .unwrap_or("?");
-        let liq = p
-            .get("liquidity_sol")
-            .and_then(Value::as_f64)
-            .unwrap_or_else(|| numf(p, "amount_sol"));
-        let pnl = p.get("live_pnl_pct").and_then(Value::as_f64).unwrap_or(0.0);
-        let range = if p.get("in_range").and_then(Value::as_bool).unwrap_or(true) {
-            "in-range"
-        } else {
-            "OUT"
+            .pool_name
+            .clone()
+            .or_else(|| p.base_symbol.clone())
+            .unwrap_or_else(|| "?".to_string());
+        let dry = if p.id.starts_with("dryrun-") { " 🧪" } else { "" };
+        let status = match p.status {
+            PositionStatus::Active => "in-range",
+            PositionStatus::OutOfRange => "out-of-range",
+            PositionStatus::Closed => "closed",
         };
-        out.push_str(&format!("\n\n{name}\n  ◎{liq:.3} · PnL {pnl:+.2}% · {range}"));
+        out.push_str(&format!(
+            "\n\n{name}{dry}\n  ◎{:.3} SOL · {status}",
+            p.amount_sol
+        ));
     }
     out
 }
