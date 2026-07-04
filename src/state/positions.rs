@@ -385,6 +385,11 @@ impl PositionState {
     /// Moves it to `Closed` so it leaves active management while keeping the
     /// record for history. Returns true if a matching active position was found.
     pub fn mark_orphaned(&mut self, id: &str) -> bool {
+        // Dry-run positions are simulated and intentionally never exist on-chain
+        // — never prune them, so they stay visible for testing/display.
+        if id.starts_with("dryrun-") {
+            return false;
+        }
         let Some(p) = self.positions.get_mut(id) else {
             return false;
         };
@@ -563,6 +568,10 @@ impl PositionState {
 
         for pos in self.positions.values_mut() {
             if pos.status == PositionStatus::Closed || active_set.contains(pos.id.as_str()) {
+                continue;
+            }
+            // Dry-run positions are simulated and never on-chain — keep them.
+            if pos.id.starts_with("dryrun-") {
                 continue;
             }
 

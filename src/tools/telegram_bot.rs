@@ -251,12 +251,17 @@ async fn handle(
             };
             match run_json("status", &[], config, state_path).await {
                 Ok(v) => {
-                    let summary = v
+                    // Keep only the headline line (Open | Closed | Fees); the
+                    // full state summary dumps per-position + event detail.
+                    let headline = v
                         .get("summary")
                         .and_then(Value::as_str)
                         .unwrap_or("")
+                        .lines()
+                        .next()
+                        .unwrap_or("")
                         .replace(" | ", "\n");
-                    format!("{flag} · {}\n\n{summary}", mode_label(config))
+                    format!("{flag} · {}\n\n{headline}", mode_label(config))
                 }
                 Err(e) => format!("⚠️ {e}"),
             }
@@ -452,7 +457,13 @@ fn truncate(s: &str) -> String {
 /// Portfolio PnL summary matching the dashboard: realized (closed) + unrealized
 /// (open) across all pools the wallet has touched, sourced from Meteora.
 async fn portfolio_text(config: &Config) -> String {
-    let wallet = crate::tools::meteora_native::wallet_pubkey_from_env().unwrap_or_default();
+    // Prefer the public MERIDIAN_WALLET address (read-only, no private key
+    // needed); fall back to deriving from the signing keypair if that's all set.
+    let wallet = std::env::var("MERIDIAN_WALLET")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| crate::tools::meteora_native::wallet_pubkey_from_env().ok())
+        .unwrap_or_default();
     if wallet.is_empty() {
         return "⚠️ wallet not set (MERIDIAN_WALLET)".to_string();
     }
