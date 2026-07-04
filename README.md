@@ -138,6 +138,10 @@ Deploy and close events are pushed to the chat automatically.
 
 One-shot commands print JSON and exit; run with no subcommand for the runtime.
 
+> After `cargo build --release`, call the binary directly instead of `cargo run --`
+> (which recompiles each time): `./target/release/meridian-rs status`. The examples
+> below use `cargo run --` so they work before you build; both forms are equivalent.
+
 ```bash
 # Runtime / setup
 cargo run -- help
