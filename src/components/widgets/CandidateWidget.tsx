@@ -15,6 +15,7 @@ type Candidate = {
   fee_active_tvl_ratio?: number;
   volatility?: number;
   base?: { mint?: string; symbol?: string; icon?: string };
+  smart_money_count?: number;
 };
 
 const formatCompact = (value?: number) => {
@@ -119,7 +120,7 @@ export const CandidateWidget = ({ className = '' }: { className?: string } = {})
             <div className="cand-pair">
               <TokenLogo srcs={logoSrcs(candidate.base?.icon, candidate.base?.mint)} symbol={candidate.base?.symbol} name={candidate.name} />
               <div className="cand-pair-text">
-                <strong>{candidate.name ?? 'UNKNOWN'}</strong>
+                <strong>{candidate.name ?? 'UNKNOWN'}{candidate.smart_money_count ? ` 🧠${candidate.smart_money_count}` : ''}</strong>
                 <small>{candidate.pool_address ? `${candidate.pool_address.slice(0, 4)}…${candidate.pool_address.slice(-4)}` : '-'}</small>
               </div>
             </div>

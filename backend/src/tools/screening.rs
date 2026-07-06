@@ -9,6 +9,9 @@ const POOL_DISCOVERY_BASE: &str = "https://pool-discovery-api.datapi.meteora.ag"
 const MIN_VOLATILITY_TIMEFRAME: &str = "30m";
 const PVP_MIN_ACTIVE_TVL: f64 = 5_000.0;
 const PVP_MIN_HOLDERS: u64 = 500;
+/// Score added per GMGN smart-money holder (capped at 25) on a candidate's base
+/// token. Modest vs the base score so it nudges ranking without dominating it.
+const SMART_MONEY_SCORE_WEIGHT: f64 = 25.0;
 const PVP_MIN_GLOBAL_FEES_SOL: f64 = 30.0;
 
 static TIMEFRAME_MINUTES: &[(&str, u32)] = &[
@@ -304,7 +307,22 @@ impl Screener {
                     candidate.fees_sol = total;
                 }
             }
+            // Smart-money quality signal: count GMGN-tagged smart-money holders
+            // on the base token and nudge the score up. Soft preference — pools
+            // with smart backing rank higher — never a hard gate.
+            if let Some(smart) =
+                crate::tools::gmgn::get_smart_money_count(&candidate.base.mint, config).await
+            {
+                candidate.smart_money_count = Some(smart);
+                candidate.score += (smart.min(25) as f64) * SMART_MONEY_SCORE_WEIGHT;
+            }
         }
+        // Re-rank after the smart-money boost so preferred pools surface first.
+        candidates.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
     }
 }
 
@@ -370,6 +388,7 @@ fn condense_raw_pool(pool: &RawPool) -> CondensedPool {
         pvp_rival_tvl: None,
         pvp_rival_holders: None,
         pvp_rival_fees: None,
+        smart_money_count: None,
     }
 }
 
@@ -820,6 +839,7 @@ mod tests {
             pvp_rival_tvl: None,
             pvp_rival_holders: None,
             pvp_rival_fees: None,
+            smart_money_count: None,
         }
     }
 
