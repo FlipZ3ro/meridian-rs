@@ -274,8 +274,18 @@ pub async fn get_token_security(mint: &str, config: &Config) -> Option<TokenSecu
     }
 }
 
-/// Wallet tags GMGN uses to mark high-quality "smart money" traders.
-const SMART_MONEY_TAGS: &[&str] = &["smart_degen", "smart_money", "renowned", "kol"];
+/// Wallet tags GMGN uses to mark high-quality "smart money" holders/traders.
+/// The `/token_top_traders` payload uses `bluechip_owner` / `diamond_hands` /
+/// `whale`; `renowned` / `kol` / `smart_degen` show up on stronger wallets too.
+const SMART_MONEY_TAGS: &[&str] = &[
+    "renowned",
+    "kol",
+    "smart_degen",
+    "smart_money",
+    "bluechip_owner",
+    "diamond_hands",
+    "whale",
+];
 
 /// Count how many of a token's top traders GMGN tags as "smart money"
 /// (smart_degen / renowned / etc.). A screening quality signal: smart money

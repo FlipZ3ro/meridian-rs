@@ -9,10 +9,10 @@ const POOL_DISCOVERY_BASE: &str = "https://pool-discovery-api.datapi.meteora.ag"
 const MIN_VOLATILITY_TIMEFRAME: &str = "30m";
 const PVP_MIN_ACTIVE_TVL: f64 = 5_000.0;
 const PVP_MIN_HOLDERS: u64 = 500;
-/// Score added per GMGN smart-money trader on a candidate's base token. Modest
-/// relative to the base score (fee/organic/volume/holders sum into the
-/// thousands) so it nudges ranking without dominating it.
-const SMART_MONEY_SCORE_WEIGHT: f64 = 40.0;
+/// Score added per GMGN smart-money holder (capped at 25) on a candidate's base
+/// token. Modest relative to the base score (fee/organic/volume/holders sum into
+/// the thousands) so it nudges ranking without dominating it.
+const SMART_MONEY_SCORE_WEIGHT: f64 = 25.0;
 const PVP_MIN_GLOBAL_FEES_SOL: f64 = 30.0;
 
 static TIMEFRAME_MINUTES: &[(&str, u32)] = &[
@@ -316,7 +316,9 @@ impl Screener {
                 crate::tools::gmgn::get_smart_money_count(&candidate.base.mint, config).await
             {
                 candidate.smart_money_count = Some(smart);
-                candidate.score += smart as f64 * SMART_MONEY_SCORE_WEIGHT;
+                // Cap the count's influence so a token with many tagged holders
+                // nudges but never dominates the base score.
+                candidate.score += (smart.min(25) as f64) * SMART_MONEY_SCORE_WEIGHT;
             }
         }
         // Re-rank after the smart-money boost so preferred pools surface first.
