@@ -94,6 +94,10 @@ pub struct CondensedPool {
     pub pvp_rival_holders: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pvp_rival_fees: Option<f64>,
+    /// Number of GMGN-tagged "smart money" traders on the base token (quality
+    /// signal). None = not looked up; Some(0) = looked up, none present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smart_money_count: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

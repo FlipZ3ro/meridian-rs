@@ -431,8 +431,14 @@ fn fmt_candidates(v: &Value) -> String {
                     .and_then(Value::as_str)
             })
             .unwrap_or("?");
+        let smart = c.get("smart_money_count").and_then(Value::as_u64).unwrap_or(0);
+        let smart_str = if smart > 0 {
+            format!(" · 🧠{smart}")
+        } else {
+            String::new()
+        };
         out.push_str(&format!(
-            "\n{}. {name} · score {} · TVL ${} · fees ◎{}",
+            "\n{}. {name} · score {} · TVL ${} · fees ◎{}{smart_str}",
             i + 1,
             compact(numf(c, "score")),
             compact(numf(c, "tvl")),

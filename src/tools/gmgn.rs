@@ -274,6 +274,56 @@ pub async fn get_token_security(mint: &str, config: &Config) -> Option<TokenSecu
     }
 }
 
+/// Wallet tags GMGN uses to mark high-quality "smart money" traders.
+const SMART_MONEY_TAGS: &[&str] = &["smart_degen", "smart_money", "renowned", "kol"];
+
+/// Count how many of a token's top traders GMGN tags as "smart money"
+/// (smart_degen / renowned / etc.). A screening quality signal: smart money
+/// backing a token → less likely to be a rug, better to LP against. Returns
+/// `None` on missing key/error (caller treats as a neutral/absent signal).
+pub async fn get_smart_money_count(mint: &str, config: &Config) -> Option<u32> {
+    if mint.is_empty() || !has_gmgn_api_key(config) {
+        return None;
+    }
+    let params = [("chain", "sol".to_string()), ("address", mint.to_string())];
+    match gmgn_fetch(config, "/v1/market/token_top_traders", &params).await {
+        Ok(payload) => {
+            let list = payload
+                .get("data")
+                .and_then(|d| d.get("list"))
+                .and_then(Value::as_array);
+            let Some(list) = list else {
+                return Some(0);
+            };
+            let mut count = 0u32;
+            for it in list {
+                // Tags can live in any of these fields, as arrays or strings —
+                // stringify and substring-match to stay robust to the shape.
+                let blob = ["tags", "maker_token_tags", "wallet_tag_v2"]
+                    .iter()
+                    .filter_map(|k| it.get(*k).map(|v| v.to_string()))
+                    .collect::<String>();
+                let suspicious = it
+                    .get("is_suspicious")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                if !suspicious && SMART_MONEY_TAGS.iter().any(|t| blob.contains(t)) {
+                    count += 1;
+                }
+            }
+            Some(count)
+        }
+        Err(e) => {
+            let short: String = mint.chars().take(8).collect();
+            module::warn(
+                "gmgn",
+                &format!("smart-money lookup failed for {}: {}", short, e),
+            );
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
