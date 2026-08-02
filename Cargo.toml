@@ -2,6 +2,13 @@
 name = "meridian-rs"
 version = "0.2.0"
 edition = "2021"
+description = "Autonomous Meteora DLMM liquidity-provider agent on Solana — a single headless Rust binary that screens memecoin pools, deploys single-sided SOL liquidity, manages positions to exit, and is driven from Telegram."
+license = "MIT"
+repository = "https://github.com/FlipZ3ro/meridian-rs"
+homepage = "https://github.com/FlipZ3ro/meridian-rs"
+readme = "README.md"
+keywords = ["solana", "defi", "meteora", "dlmm", "trading-bot"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
