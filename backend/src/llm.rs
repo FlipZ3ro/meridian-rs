@@ -69,6 +69,9 @@ struct ChatRequest {
     tool_choice: Option<serde_json::Value>,
     temperature: f32,
     max_tokens: u32,
+    // Force non-streaming. Some OpenAI-compatible proxies stream by default when
+    // this is absent, which breaks JSON parsing of the response.
+    stream: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -125,6 +128,7 @@ impl LlmClient {
             tool_choice,
             temperature,
             max_tokens,
+            stream: false,
         };
 
         // Retry up to 3 times on transient errors
