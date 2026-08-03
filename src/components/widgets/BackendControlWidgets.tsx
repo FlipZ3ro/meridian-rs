@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Cpu, Power, Play, Square, RotateCw, Zap } from 'lucide-react';
+import { Cpu, Power, Play, Square, RotateCw, Zap, Wallet } from 'lucide-react';
 import { GlassCard } from '../ui/GlassCard';
 import { cachedJson } from '../../lib/clientCache';
 
@@ -14,8 +14,11 @@ const Field = ({ label, value }: { label: string; value: unknown }) => (
   </div>
 );
 
+const shortAddr = (a?: string) => (a && a.length > 12 ? `${a.slice(0, 4)}…${a.slice(-4)}` : a ?? '');
+
 export const BackendStatusWidget = () => {
   const [status, setStatus] = useState<any>();
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -28,6 +31,16 @@ export const BackendStatusWidget = () => {
     return () => { mounted = false; window.clearInterval(timer); };
   }, []);
 
+  const wallet: string | undefined = status?.wallet;
+  const copyWallet = async () => {
+    if (!wallet) return;
+    try {
+      await navigator.clipboard.writeText(wallet);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch { /* clipboard unavailable */ }
+  };
+
   return (
     <GlassCard className="backend-card backend-status-card">
       <div className="terminal-title"><Cpu size={18} />BACKEND STATUS</div>
@@ -36,6 +49,18 @@ export const BackendStatusWidget = () => {
         <b>{status?.status ?? 'loading'}</b>
         <span>{status?.dry_run ? 'DRY RUN' : 'LIVE'}</span>
       </div>
+      {wallet && (
+        <button
+          type="button"
+          className="backend-wallet"
+          onClick={copyWallet}
+          title={`${wallet}\nClick to copy`}
+        >
+          <Wallet size={13} />
+          <code>{shortAddr(wallet)}</code>
+          <span className="backend-wallet-hint">{copied ? 'copied' : 'copy'}</span>
+        </button>
+      )}
       <div className="backend-grid-two">
         <Field label="Active positions" value={status?.active_positions ?? 0} />
         <Field label="Screen every" value={`${status?.schedule?.screeningIntervalMin ?? '-'} min`} />

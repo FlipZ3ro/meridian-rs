@@ -1027,6 +1027,10 @@ h3 { font-size: 15px; }
 .backend-status-strip { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 18px; padding: 13px 15px; border: 1px solid rgba(85, 223, 134, 0.22); border-radius: 12px; background: rgba(7, 15, 28, 0.62); }
 .backend-status-strip b { color: #e8edf8; font-size: 22px; letter-spacing: -0.03em; }
 .backend-status-strip span { color: var(--green); font-family: var(--font-mono); font-size: 12px; font-weight: 900; letter-spacing: .1em; }
+.backend-wallet { display: flex; align-items: center; gap: 8px; width: 100%; margin: 0 0 16px; padding: 10px 14px; border: 1px solid rgba(168, 181, 211, 0.16); border-radius: 12px; background: rgba(7, 15, 28, 0.62); color: #cdd6e6; cursor: pointer; transition: border-color .15s, background .15s; }
+.backend-wallet:hover { border-color: rgba(85, 223, 134, 0.4); background: rgba(7, 15, 28, 0.82); }
+.backend-wallet code { flex: 1 1 auto; text-align: left; font-family: var(--font-mono); font-size: 13px; letter-spacing: .04em; color: #e8edf8; }
+.backend-wallet-hint { color: var(--green); font-family: var(--font-mono); font-size: 11px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
 /* Agent control (start/stop) */
 .agent-state { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; padding: 13px 15px; border: 1px solid rgba(168, 181, 211, 0.16); border-radius: 12px; background: rgba(7, 15, 28, 0.62); }
 .agent-dot { width: 11px; height: 11px; border-radius: 50%; flex: 0 0 auto; }

@@ -966,9 +966,17 @@ fn json_error(command: &str, error: impl std::fmt::Display) -> Value {
 pub fn web_status_snapshot(config: &Config, state_path: &str) -> Result<Value> {
     let positions = positions_payload(state_path, config.dry_run)?;
     let recent_decisions = recent_decisions_payload(state_path, 10)?;
+    // Public wallet address only (read-only, no key material). Prefer the
+    // explicit MERIDIAN_WALLET; fall back to the pubkey derived from the signer.
+    let wallet = std::env::var("MERIDIAN_WALLET")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| crate::tools::meteora_native::wallet_pubkey_from_env().ok())
+        .unwrap_or_default();
     Ok(json!({
         "status": "running",
         "dry_run": config.dry_run,
+        "wallet": wallet,
         "active_positions": positions["active_count"].clone(),
         "positions": positions["positions"].clone(),
         "recent_events": positions["recent_events"].clone(),
