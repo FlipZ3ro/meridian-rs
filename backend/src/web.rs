@@ -323,7 +323,7 @@ const _OLD_MAIN_PAGE: &str = r#"
         <div class="panel-body">
           <p class="muted">Actions are sent to <span class="pill">/api/control</span> and stay behind Rust dry-run guardrails unless config explicitly allows live execution.</p>
           <div class="form-grid">
-            <div class="field"><label for="control-action">Action</label><select id="control-action"><option>deploy_position</option><option>claim_fees</option><option>close_position</option><option>swap_token</option><option>screen</option><option>manage</option></select></div>
+            <div class="field"><label for="control-action">Action</label><select id="control-action"><option>deploy_position</option><option>claim_fees</option><option>close_position</option><option>swap_token</option><option>screen</option><option>manage</option><option>quickflip</option></select></div>
             <div class="field"><label for="control-pool">Pool</label><input id="control-pool" placeholder="pool"></div>
             <div class="field"><label for="control-position">Position</label><input id="control-position" placeholder="position_id"></div>
             <div class="field"><label for="control-amount">Amount SOL</label><input id="control-amount" placeholder="0.10" inputmode="decimal"></div>
@@ -519,7 +519,7 @@ async function runControl(action) {
 }
 async function runManualControl() {
   const action = $('control-action').value.trim();
-  if (action === 'screen' || action === 'manage') return runControl(action);
+  if (action === 'screen' || action === 'manage' || action === 'quickflip') return runControl(action);
   const pool = $('control-pool').value.trim();
   const position_id = $('control-position').value.trim();
   const amount = Number($('control-amount').value || 0);
@@ -1172,6 +1172,28 @@ async fn run_control_action(state: &WebAppState, request: ControlRequest) -> Res
             json!({
                 "action": "manage",
                 "result": run_management_cycle(&config, &llm, &mut positions, &mut pool_memory, &wallet).await?,
+            })
+        }
+        "quickflip" | "quick_flip" => {
+            // Arm/disarm the deterministic volume-spike scalper. Accepts
+            // {"enabled": true|false}; with no arg it toggles the current state.
+            let target = request
+                .args
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .unwrap_or_else(|| !crate::tools::quickflip::is_enabled());
+            crate::tools::quickflip::set_enabled(target);
+            let qf = &config.quickflip;
+            json!({
+                "action": "quickflip",
+                "enabled": target,
+                "mode": if config.dry_run { "dry_run" } else { "live" },
+                "params": {
+                    "min_vol_per_min": qf.min_vol_per_min,
+                    "max_hold_min": qf.max_hold_min,
+                    "vol_fade_ratio": qf.vol_fade_ratio,
+                    "deploy_amount_sol": qf.deploy_amount_sol,
+                },
             })
         }
         tool_name => {

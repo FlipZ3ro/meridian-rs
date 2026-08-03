@@ -8,6 +8,7 @@ pub mod dlmm;
 pub mod executor;
 pub mod gmgn;
 pub mod meteora_native;
+pub mod quickflip;
 pub mod screening;
 pub mod smart_wallets;
 pub mod study;

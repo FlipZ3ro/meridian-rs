@@ -390,6 +390,18 @@ async fn main() -> Result<()> {
         });
     }
 
+    // ── Quick-flip scalper (deterministic, no LLM) ─────────────
+    // Separate volume-spike strategy. Off unless enabled in config; armed at
+    // runtime via the web control surface (/api/control action "quickflip").
+    tools::quickflip::set_enabled(config.quickflip.enabled);
+    {
+        let qf_config = config.clone();
+        let qf_wallet = wallet_address.clone();
+        tokio::spawn(async move {
+            tools::quickflip::run(qf_config, qf_wallet).await;
+        });
+    }
+
     info("main", "Starting cycle scheduler...");
 
     // ── PnL Poller (every 30s, lightweight, no LLM) ───────────

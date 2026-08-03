@@ -29,6 +29,90 @@ pub struct Config {
     pub indicators: IndicatorsConfig,
     #[serde(default)]
     pub darwin: DarwinConfig,
+    #[serde(default)]
+    pub quickflip: QuickFlipConfig,
+}
+
+/// Quick-flip mode: deterministic volume-spike scalping (separate from the LLM
+/// agent). All fields default so existing configs keep working; `enabled` is
+/// off by default and toggled at runtime via the web control API.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickFlipConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_qf_poll_secs")]
+    pub poll_secs: u64,
+    #[serde(default = "default_qf_min_vol_per_min")]
+    pub min_vol_per_min: f64,
+    #[serde(default = "default_qf_min_fee_tvl")]
+    pub min_fee_tvl_ratio: f64,
+    #[serde(default = "default_qf_deploy_amount")]
+    pub deploy_amount_sol: f64,
+    #[serde(default = "default_qf_bins_below")]
+    pub bins_below: i64,
+    #[serde(default)]
+    pub bins_above: i64,
+    #[serde(default = "default_qf_max_hold_min")]
+    pub max_hold_min: u32,
+    #[serde(default = "default_qf_vol_fade_ratio")]
+    pub vol_fade_ratio: f64,
+    #[serde(default = "default_qf_take_profit_usd")]
+    pub take_profit_usd: f64,
+    #[serde(default = "default_qf_min_tvl")]
+    pub min_tvl: f64,
+    #[serde(default = "default_qf_max_tvl")]
+    pub max_tvl: f64,
+}
+
+fn default_qf_poll_secs() -> u64 {
+    45
+}
+fn default_qf_min_vol_per_min() -> f64 {
+    30_000.0
+}
+fn default_qf_min_fee_tvl() -> f64 {
+    1.0
+}
+fn default_qf_deploy_amount() -> f64 {
+    0.2
+}
+fn default_qf_bins_below() -> i64 {
+    34
+}
+fn default_qf_max_hold_min() -> u32 {
+    10
+}
+fn default_qf_vol_fade_ratio() -> f64 {
+    0.5
+}
+fn default_qf_take_profit_usd() -> f64 {
+    0.5
+}
+fn default_qf_min_tvl() -> f64 {
+    5_000.0
+}
+fn default_qf_max_tvl() -> f64 {
+    300_000.0
+}
+
+impl Default for QuickFlipConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            poll_secs: default_qf_poll_secs(),
+            min_vol_per_min: default_qf_min_vol_per_min(),
+            min_fee_tvl_ratio: default_qf_min_fee_tvl(),
+            deploy_amount_sol: default_qf_deploy_amount(),
+            bins_below: default_qf_bins_below(),
+            bins_above: 0,
+            max_hold_min: default_qf_max_hold_min(),
+            vol_fade_ratio: default_qf_vol_fade_ratio(),
+            take_profit_usd: default_qf_take_profit_usd(),
+            min_tvl: default_qf_min_tvl(),
+            max_tvl: default_qf_max_tvl(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -682,6 +766,7 @@ impl Default for Config {
             hive_mind: HiveMindConfig::default(),
             indicators: IndicatorsConfig::default(),
             darwin: DarwinConfig::default(),
+            quickflip: QuickFlipConfig::default(),
         }
     }
 }
