@@ -1663,7 +1663,13 @@ impl ToolExecutor {
                     .as_f64()
                     .or(args["amount_sol"].as_f64())
                     .unwrap_or(0.0);
-                let bins_below = args["bins_below"].as_i64();
+                // Range width is OPERATOR-CONFIG-driven, not LLM-chosen: pass
+                // None so deploy_position sizes bins_below from the config
+                // (target_downside_pct + bin_step, clamped to [min,max]). Keeps
+                // the range consistent + tunable instead of whatever the LLM
+                // guesses per call.
+                let _ = args["bins_below"].as_i64(); // ignored on purpose
+                let bins_below: Option<i64> = None;
                 let bins_above = args["bins_above"].as_i64();
                 let strategy = args["strategy"].as_str();
                 match crate::tools::dlmm::deploy_position(

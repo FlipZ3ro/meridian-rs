@@ -54,15 +54,14 @@ pub fn get_all_tool_definitions() -> Vec<ToolDefinition> {
         ),
         tool(
             "deploy_position",
-            "Deploy SOL into a DLMM pool with specified bins",
+            "Deploy SOL into a DLMM pool. The below-range width is auto-sized from operator config (downside coverage); do NOT choose bins yourself.",
             json!({
                 "type": "object",
                 "properties": {
                     "pool_address": {"type": "string", "description": "The DLMM pool address"},
                     "amount_y": {"type": "number", "description": "Amount of SOL (quote token) to deploy"},
                     "amount_sol": {"type": "number", "description": "Amount of SOL to deploy (alternative to amount_y)"},
-                    "bins_below": {"type": "integer", "description": "Number of bins below active bin"},
-                    "bins_above": {"type": "integer", "description": "Number of bins above active bin (set to 0)"}
+                    "bins_above": {"type": "integer", "description": "Bins above active bin (set to 0 for single-side SOL)"}
                 },
                 "required": ["pool_address"]
             }),
