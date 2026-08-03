@@ -838,8 +838,9 @@ pub async fn execute_swap(
 }
 
 /// Minimum seconds between dust sweeps — bounds cost and avoids hammering
-/// Jupiter with unroutable dust every management cycle.
-const DUST_SWEEP_COOLDOWN_SECS: u64 = 900; // 15 min
+/// Jupiter with unroutable dust. Kept short so leftovers clear promptly; the
+/// management cadence (a few min) is the real pacing.
+const DUST_SWEEP_COOLDOWN_SECS: u64 = 120; // 2 min
 
 fn dust_sweep_gate() -> &'static std::sync::Mutex<Option<std::time::Instant>> {
     static G: std::sync::OnceLock<std::sync::Mutex<Option<std::time::Instant>>> =
@@ -884,8 +885,24 @@ pub async fn sweep_dust_to_sol(
     let rpc = crate::tools::meteora_native::resolve_rpc_url(config);
     let balances = match get_wallet_balances(&rpc, &wallet, "").await {
         Ok(b) => b,
-        Err(_) => return 0,
+        Err(e) => {
+            crate::utils::logger::module::warn("dust", &format!("balance read failed: {}", e));
+            return 0;
+        }
     };
+    // Observability: how many non-SOL tokens the sweep actually sees.
+    let non_sol: Vec<&TokenBalance> = balances
+        .tokens
+        .iter()
+        .filter(|t| normalize_mint(&t.mint) != SOL_MINT && t.balance > 0.0)
+        .collect();
+    crate::utils::logger::module::info(
+        "dust",
+        &format!(
+            "sweep check — {} non-SOL token(s) in wallet",
+            non_sol.len()
+        ),
+    );
 
     let mut swept = 0usize;
     for t in &balances.tokens {
