@@ -1237,7 +1237,10 @@ mod tests {
     #[test]
     fn test_close_rules_stop_loss() {
         let config = test_config();
-        let pos = test_position();
+        let mut pos = test_position();
+        // Stop-loss is exempt from the min-duration gate but requires ~1 min of
+        // age (past the just-deployed valuation glitch), so age the position.
+        pos.created_at = (Utc::now() - chrono::Duration::minutes(5)).to_rfc3339();
         let rule = get_deterministic_close_rule(&pos, 0, -20.0, 0.01, 0, &config);
         assert_eq!(rule, Some(CloseRule::StopLoss));
     }
