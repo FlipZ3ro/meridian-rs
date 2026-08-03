@@ -353,6 +353,9 @@ async fn rpc_call(
 
 const USDC_MINT: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const SPL_TOKEN_PROGRAM: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+/// Token-2022 program. Most pump.fun / launch tokens the bot LPs are minted here,
+/// NOT the classic SPL program — enumerate both or they're invisible.
+const TOKEN_2022_PROGRAM: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
 
 /// Get wallet balances (SOL + SPL tokens) via Solana RPC.
 ///
@@ -395,26 +398,41 @@ pub async fn get_wallet_balances(
     // ── SPL token accounts ───────────────────────────────────────
     let mut tokens: Vec<TokenBalance> = vec![];
     let mut usdc_balance = 0.0;
-    let token_result = rpc_call(
-        &client,
-        rpc,
-        "getTokenAccountsByOwner",
-        serde_json::json!([
-            pubkey,
-            { "programId": SPL_TOKEN_PROGRAM },
-            { "encoding": "jsonParsed" }
-        ]),
-    )
-    .await;
-    if let Some(accounts) = token_result
-        .as_ref()
-        .and_then(|r| r.get("value"))
-        .and_then(serde_json::Value::as_array)
-    {
+    // Enumerate BOTH token programs — classic SPL and Token-2022. Most
+    // pump.fun/launch tokens the bot LPs are Token-2022; querying only the
+    // classic program left them invisible (balance undercount + dust-sweep blind).
+    for program in [SPL_TOKEN_PROGRAM, TOKEN_2022_PROGRAM] {
+        let token_result = rpc_call(
+            &client,
+            rpc,
+            "getTokenAccountsByOwner",
+            serde_json::json!([
+                pubkey,
+                { "programId": program },
+                { "encoding": "jsonParsed" }
+            ]),
+        )
+        .await;
+        let Some(accounts) = token_result
+            .as_ref()
+            .and_then(|r| r.get("value"))
+            .and_then(serde_json::Value::as_array)
+        else {
+            continue;
+        };
         for acc in accounts {
             let info = &acc["account"]["data"]["parsed"]["info"];
             let mint = info["mint"].as_str().unwrap_or("").to_string();
-            let amount = info["tokenAmount"]["uiAmount"].as_f64().unwrap_or(0.0);
+            // Some RPCs return uiAmount: null with the value only in
+            // uiAmountString — fall back so tokens aren't silently skipped.
+            let amount = info["tokenAmount"]["uiAmount"]
+                .as_f64()
+                .or_else(|| {
+                    info["tokenAmount"]["uiAmountString"]
+                        .as_str()
+                        .and_then(|s| s.parse::<f64>().ok())
+                })
+                .unwrap_or(0.0);
             if mint.is_empty() || amount <= 0.0 {
                 continue;
             }
