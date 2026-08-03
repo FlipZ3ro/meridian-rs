@@ -20,7 +20,7 @@ import { WeatherWidget } from '../widgets/WeatherWidget';
 import { MusicWidget } from '../widgets/MusicWidget';
 import { ActivityWidget } from '../widgets/ActivityWidget';
 import { CandidateWidget } from '../widgets/CandidateWidget';
-import { BackendStatusWidget, AgentControlWidget } from '../widgets/BackendControlWidgets';
+import { BackendStatusWidget, AgentControlWidget, QuickFlipControlWidget } from '../widgets/BackendControlWidgets';
 import { cachedJson } from '../../lib/clientCache';
 
 type ViewId = 'overview' | 'positions' | 'activity' | 'portfolio' | 'candidates' | 'settings';
@@ -148,7 +148,7 @@ export const DashboardView = () => {
         {view === 'activity' && <ActivityWidget />}
         {view === 'portfolio' && <PortfolioWidget />}
         {view === 'candidates' && <CandidateWidget />}
-        {view === 'settings' && (<><AgentControlWidget /><BackendStatusWidget /></>)}
+        {view === 'settings' && (<><AgentControlWidget /><QuickFlipControlWidget /><BackendStatusWidget /></>)}
       </section>
 
       <aside className="dash-rail">

@@ -69,6 +69,7 @@ pub fn build_router(state: WebAppState) -> Router {
         .route("/api/decisions", get(get_decisions))
         .route("/api/config", get(get_config).post(post_config))
         .route("/api/control", post(post_control))
+        .route("/api/quickflip", get(get_quickflip))
         .route("/api/lessons", get(get_lessons))
         .route("/api/performance", get(get_performance))
         .route("/api/portfolio", get(get_portfolio))
@@ -576,6 +577,32 @@ async fn status(State(state): State<WebAppState>) -> Json<Value> {
         Ok(config) => json_ok("status", web_status_snapshot(&config, &state.state_path)),
         Err(error) => json_error("status", error),
     })
+}
+
+/// Read-only quick-flip state (does NOT toggle). Powers the dashboard toggle's
+/// initial render so the switch reflects reality on page load.
+async fn get_quickflip(State(state): State<WebAppState>) -> Json<Value> {
+    let enabled = crate::tools::quickflip::is_enabled();
+    let (mode, params) = match load_web_config(&state) {
+        Ok(config) => {
+            let qf = &config.quickflip;
+            (
+                if config.dry_run { "dry_run" } else { "live" },
+                json!({
+                    "min_vol_per_min": qf.min_vol_per_min,
+                    "max_hold_min": qf.max_hold_min,
+                    "vol_fade_ratio": qf.vol_fade_ratio,
+                    "deploy_amount_sol": qf.deploy_amount_sol,
+                }),
+            )
+        }
+        Err(_) => ("unknown", json!({})),
+    };
+    Json(json!({
+        "success": true,
+        "command": "quickflip",
+        "data": { "enabled": enabled, "mode": mode, "params": params },
+    }))
 }
 
 async fn get_positions(State(state): State<WebAppState>) -> Json<Value> {

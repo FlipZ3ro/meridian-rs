@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Cpu, Power, Play, Square, RotateCw } from 'lucide-react';
+import { Cpu, Power, Play, Square, RotateCw, Zap } from 'lucide-react';
 import { GlassCard } from '../ui/GlassCard';
 import { cachedJson } from '../../lib/clientCache';
 
@@ -107,6 +107,99 @@ export const AgentControlWidget = () => {
         <button type="button" className="agent-btn restart" disabled={busy} onClick={() => act('restart')}><RotateCw size={14} />Restart</button>
       </div>
       <p className="backend-note">Frontend &amp; dashboard stay online — only the trading agent starts/stops.</p>
+    </GlassCard>
+  );
+};
+
+// Arm/disarm the deterministic quick-flip scalper (volume-spike fast in/out).
+// Independent of the LLM agent. Off by default; when armed the bot's own loop
+// deploys on qualifying spikes — in LIVE mode that is real capital, so enabling
+// is confirmed. Admin-gated via /api/agent/quickflip (middleware session).
+type QuickFlipState = {
+  enabled?: boolean;
+  mode?: string;
+  params?: {
+    min_vol_per_min?: number;
+    max_hold_min?: number;
+    vol_fade_ratio?: number;
+    deploy_amount_sol?: number;
+  };
+};
+
+export const QuickFlipControlWidget = () => {
+  const [state, setState] = useState<QuickFlipState>();
+  const [busy, setBusy] = useState(false);
+
+  const load = async () => {
+    try {
+      const res = await fetch('/api/agent/quickflip', { cache: 'no-store' });
+      const data: ApiPayload<QuickFlipState> = await res.json();
+      if (data?.data) setState(data.data);
+    } catch {
+      /* keep last known state; retry on next poll */
+    }
+  };
+
+  useEffect(() => {
+    load();
+    const timer = window.setInterval(load, 8_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const armed = state?.enabled === true;
+  const live = state?.mode === 'live';
+
+  const toggle = async () => {
+    if (busy || state === undefined) return;
+    const next = !armed;
+    if (next && live) {
+      const size = state?.params?.deploy_amount_sol ?? 0.2;
+      if (!window.confirm(`Arm quick-flip in LIVE mode? The bot will deploy REAL positions (~${size} SOL each) on qualifying volume spikes.`)) return;
+    }
+    setBusy(true);
+    try {
+      const res = await fetch('/api/agent/quickflip', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ enabled: next }),
+      });
+      const data: ApiPayload<QuickFlipState> = await res.json();
+      // Backend echoes the new state; fall back to optimistic value.
+      setState((prev) => ({ ...prev, enabled: data?.data?.enabled ?? next, mode: data?.data?.mode ?? prev?.mode }));
+    } catch {
+      /* status refresh on next poll */
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const p = state?.params;
+  return (
+    <GlassCard className="backend-card agent-control-card">
+      <div className="terminal-title"><Zap size={18} />QUICK-FLIP SCALPER</div>
+      <div className="terminal-divider" />
+      <div className="agent-state">
+        <span className={`agent-dot ${armed ? 'on' : 'off'}`} />
+        <b>{state === undefined ? '…' : armed ? 'ARMED' : 'OFF'}</b>
+        <span className="agent-sub">{state?.mode ? (live ? 'LIVE' : 'dry run') : 'volume-spike'}</span>
+      </div>
+      <div className="agent-actions">
+        <button
+          type="button"
+          className={`agent-btn ${armed ? 'stop' : 'start'}`}
+          disabled={busy || state === undefined}
+          onClick={toggle}
+        >
+          {armed ? <><Square size={14} />Disarm</> : <><Play size={14} />Arm</>}
+        </button>
+      </div>
+      <div className="backend-grid-two">
+        <Field label="Entry vol/min" value={p?.min_vol_per_min ? `$${(p.min_vol_per_min / 1000).toFixed(0)}k` : '-'} />
+        <Field label="Max hold" value={p?.max_hold_min ? `${p.max_hold_min} min` : '-'} />
+        <Field label="Fade exit" value={p?.vol_fade_ratio ? `×${p.vol_fade_ratio}` : '-'} />
+        <Field label="Size / pos" value={p?.deploy_amount_sol ? `◎${p.deploy_amount_sol}` : '-'} />
+      </div>
+      <p className="backend-note">Deterministic, no LLM. Enters on volume spikes, exits on fade / max-hold. Single-side SOL.</p>
     </GlassCard>
   );
 };
