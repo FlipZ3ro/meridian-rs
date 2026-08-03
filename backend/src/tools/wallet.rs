@@ -905,6 +905,28 @@ pub async fn sweep_dust_to_sol(
     );
 
     let mut swept = 0usize;
+
+    // Unwrap residual wSOL back to native SOL (NOT a Jupiter swap — just close
+    // the wSOL account). The per-close unwrap can fail transiently (race with a
+    // concurrent op → "invalid account data"); this is the safety-net retry so
+    // wrapped SOL principal never stays stranded.
+    let has_wsol = balances
+        .tokens
+        .iter()
+        .any(|t| normalize_mint(&t.mint) == SOL_MINT && t.balance > 0.0);
+    if has_wsol {
+        match crate::tools::meteora_native::unwrap_all_wsol(config).await {
+            Ok(Some(_)) => {
+                crate::utils::logger::module::info("dust", "unwrapped residual wSOL → native SOL");
+                swept += 1;
+            }
+            Ok(None) => {}
+            Err(e) => crate::utils::logger::module::warn(
+                "dust",
+                &format!("wSOL unwrap failed (will retry next sweep): {}", e),
+            ),
+        }
+    }
     for t in &balances.tokens {
         let mint = normalize_mint(&t.mint);
         if mint == SOL_MINT || t.balance <= 0.0 {

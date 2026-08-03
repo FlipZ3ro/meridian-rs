@@ -496,6 +496,16 @@ async fn unwrap_wsol(rpc: &RpcClient, keypair: &Keypair) -> Result<Option<String
     Ok(Some(signature.to_string()))
 }
 
+/// Close any wSOL token accounts the wallet holds, converting wrapped SOL back
+/// to native SOL. Safety net for residual wSOL when the per-close unwrap missed
+/// or failed transiently (e.g. a race with a concurrent op). Uses the env
+/// signing keypair. Returns the tx signature, or None if there was no wSOL.
+pub async fn unwrap_all_wsol(config: &Config) -> Result<Option<String>> {
+    let keypair = keypair_from_secret(&wallet_secret_from_env()?)?;
+    let rpc = RpcClient::new(resolve_rpc_url(config));
+    unwrap_wsol(&rpc, &keypair).await
+}
+
 /// Resolve a position's base mint (the pool's token_x) on-chain. Reads the
 /// position account to get its `lb_pair` (stored as the first field after the
 /// 8-byte discriminator on both `Position` and `PositionV2`), then reads the
