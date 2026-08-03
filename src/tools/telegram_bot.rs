@@ -27,11 +27,17 @@ const HELP: &str = "🤖 *Meridian control*\n\
 /start — resume trading (new deploys)\n\
 /stop — pause new deploys (still manages open)\n\
 /dryrun [on|off] — toggle simulated vs live execution\n\
+/quickflip [on|off] — toggle volume-spike scalper\n\
 /close <pool|position> — close a position\n\
 /help — this message";
 
 /// Spawned from `main`. Never returns; loops on getUpdates.
-pub async fn run(config: Config, state_path: String, trading_enabled: Arc<AtomicBool>) {
+pub async fn run(
+    config: Config,
+    state_path: String,
+    trading_enabled: Arc<AtomicBool>,
+    quickflip_enabled: Arc<AtomicBool>,
+) {
     let token = match config
         .api
         .telegram_bot_token
@@ -102,7 +108,14 @@ pub async fn run(config: Config, state_path: String, trading_enabled: Arc<Atomic
                         continue;
                     }
 
-                    let reply = handle(text, &config, &state_path, &trading_enabled).await;
+                    let reply = handle(
+                        text,
+                        &config,
+                        &state_path,
+                        &trading_enabled,
+                        &quickflip_enabled,
+                    )
+                    .await;
                     let _ =
                         crate::tools::telegram::send_message_safe(&token, &admin, &reply).await;
                 }
@@ -127,6 +140,7 @@ async fn set_commands(client: &reqwest::Client, token: &str) {
             { "command": "balance",    "description": "Wallet SOL balance" },
             { "command": "candidates", "description": "Top screening candidates" },
             { "command": "dryrun",     "description": "Toggle simulated vs live execution" },
+            { "command": "quickflip",  "description": "Toggle volume-spike scalper" },
             { "command": "stop",       "description": "Pause new deploys" },
             { "command": "close",      "description": "Close a position" },
             { "command": "help",       "description": "List commands" }
@@ -191,6 +205,7 @@ async fn handle(
     config: &Config,
     state_path: &str,
     trading_enabled: &Arc<AtomicBool>,
+    quickflip_enabled: &Arc<AtomicBool>,
 ) -> String {
     // Map reply-keyboard button labels to their command.
     let mapped = match text.trim() {
@@ -240,6 +255,27 @@ async fn handle(
             } else {
                 "🔴 LIVE MODE — real transactions will be sent!\nUse /dryrun on to return to simulation."
                     .to_string()
+            }
+        }
+        "quickflip" | "qf" | "flip" => {
+            let target = match rest.first().map(|s| s.to_lowercase()).as_deref() {
+                Some("on" | "true" | "1") => true,
+                Some("off" | "false" | "0") => false,
+                _ => !quickflip_enabled.load(Ordering::SeqCst), // no arg → toggle
+            };
+            quickflip_enabled.store(target, Ordering::SeqCst);
+            let qf = &config.quickflip;
+            if target {
+                format!(
+                    "⚡ Quick-flip ON · {} — volume-spike scalper armed.\n  entry vol/min ≥ ${:.0}k · hold ≤ {}m · fade ×{:.2} · {:.3} SOL/pos",
+                    mode_label(config),
+                    qf.min_vol_per_min / 1000.0,
+                    qf.max_hold_min,
+                    qf.vol_fade_ratio,
+                    qf.deploy_amount_sol,
+                )
+            } else {
+                "⚪ Quick-flip OFF — scalper paused (open flip position still managed).".to_string()
             }
         }
         "pnl" => portfolio_text(config).await,

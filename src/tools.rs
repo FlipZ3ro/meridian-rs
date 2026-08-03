@@ -11,6 +11,7 @@ pub mod meteora_native;
 pub mod screening;
 pub mod smart_wallets;
 pub mod study;
+pub mod quickflip;
 pub mod telegram;
 pub mod telegram_bot;
 pub mod token;

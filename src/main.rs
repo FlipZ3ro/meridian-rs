@@ -606,6 +606,23 @@ async fn main() -> Result<()> {
     // Shared trading toggle, flipped via Telegram /start /stop. Gates the
     // screening cycle (new deploys); management & close still run when paused.
     let trading_enabled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    // Quick-flip mode toggle (deterministic volume-spike scalper). Off unless
+    // enabled in config; flipped at runtime via Telegram /quickflip.
+    let quickflip_enabled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+        config.quickflip.enabled,
+    ));
+
+    // Quick-flip loop — separate deterministic strategy, gated by its own toggle
+    // and the shared trading pause.
+    {
+        let qf_config = config.clone();
+        let qf_wallet = wallet_address.clone();
+        let qf_trading = trading_enabled.clone();
+        let qf_enabled = quickflip_enabled.clone();
+        tokio::spawn(async move {
+            tools::quickflip::run(qf_config, qf_wallet, qf_trading, qf_enabled).await;
+        });
+    }
 
     let screen_interval =
         tokio::time::Duration::from_secs(config.schedule.screening_interval_min as u64 * 60);
@@ -625,8 +642,9 @@ async fn main() -> Result<()> {
         let tg_config = config.clone();
         let tg_state = state_path.clone();
         let tg_enabled = trading_enabled.clone();
+        let tg_qf = quickflip_enabled.clone();
         tokio::spawn(async move {
-            tools::telegram_bot::run(tg_config, tg_state, tg_enabled).await;
+            tools::telegram_bot::run(tg_config, tg_state, tg_enabled, tg_qf).await;
         });
     }
 
