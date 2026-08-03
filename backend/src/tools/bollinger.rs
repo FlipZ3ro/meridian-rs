@@ -74,6 +74,44 @@ pub struct EntrySignals {
     pub flush: Option<FlushState>,
 }
 
+/// Short RSI period for the over-extension take-profit exit (Evil Panda uses
+/// RSI(2)). A fast RSI spikes toward 100 on sharp up-moves — the local-top
+/// signal to bank the bounce on a single-side-SOL-below position.
+pub const EXIT_RSI_PERIOD: usize = 2;
+
+/// Take-profit exit signals (over-extension to the UPSIDE), computed from the
+/// same OHLCV fetch. Each is None when data is insufficient.
+pub struct ExitSignals {
+    pub rsi: Option<f64>,
+    pub percent_b: Option<f64>,
+}
+
+/// Simple RSI of the latest close over `period` (unsmoothed — appropriate for a
+/// very short period like 2). ~100 when recent candles are all up, ~0 when all
+/// down. None if there aren't `period + 1` closes.
+pub fn rsi(closes: &[f64], period: usize) -> Option<f64> {
+    if period == 0 || closes.len() < period + 1 {
+        return None;
+    }
+    let window = &closes[closes.len() - period - 1..]; // period+1 closes → period deltas
+    let (mut gains, mut losses) = (0.0, 0.0);
+    for w in window.windows(2) {
+        let change = w[1] - w[0];
+        if change >= 0.0 {
+            gains += change;
+        } else {
+            losses -= change;
+        }
+    }
+    let avg_gain = gains / period as f64;
+    let avg_loss = losses / period as f64;
+    if avg_loss == 0.0 {
+        return Some(if avg_gain == 0.0 { 50.0 } else { 100.0 });
+    }
+    let rs = avg_gain / avg_loss;
+    Some(100.0 - 100.0 / (1.0 + rs))
+}
+
 /// Classify the recent price action into a flush regime from closes
 /// (oldest→newest). None if there aren't enough candles.
 pub fn flush_state(closes: &[f64], window: usize) -> Option<FlushState> {
@@ -215,6 +253,25 @@ pub async fn entry_signals(config: &Config, mint: &str) -> Result<EntrySignals> 
         percent_b: percent_b(&closes, BB_PERIOD),
         volume_trend: volume_trend(&volumes),
         flush: flush_state(&closes, FLUSH_WINDOW),
+    })
+}
+
+/// Compute the take-profit exit signals (RSI over EXIT_RSI_PERIOD + Bollinger
+/// %B) for a token mint on the configured short timeframe, from one OHLCV
+/// fetch. Used to bank the bounce when price is over-extended to the upside.
+pub async fn exit_signals(config: &Config, mint: &str) -> Result<ExitSignals> {
+    let interval = config
+        .indicators
+        .intervals
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "5_MINUTE".to_string());
+    let need = (BB_PERIOD + 8) as u32;
+    let candles = need.min(config.indicators.candles.max(need));
+    let (closes, _volumes) = fetch_candles(config, mint, &interval, candles).await?;
+    Ok(ExitSignals {
+        rsi: rsi(&closes, EXIT_RSI_PERIOD),
+        percent_b: percent_b(&closes, BB_PERIOD),
     })
 }
 

@@ -497,6 +497,48 @@ pub async fn run_pnl_poll(
             }
         }
 
+        // Over-extension take-profit (Evil Panda RSI(2) / BB-upper): bank the
+        // bounce when the base token is over-extended to the UPSIDE while the
+        // position is in profit. Deterministic; same exit path as stop-loss/OOR.
+        // Only fires in profit so it never realizes a loss on this rule alone.
+        if config.management.exit_overextended_enabled
+            && !exits_needed.iter().any(|(addr, _)| addr == &snapshot.id)
+        {
+            if let Some(pnl) = snapshot.pnl_pct {
+                if pnl >= config.management.exit_min_profit_pct {
+                    let base_mint = positions
+                        .positions
+                        .get(&snapshot.id)
+                        .map(|p| p.base_mint.clone())
+                        .unwrap_or_default();
+                    if !base_mint.is_empty() && base_mint != crate::tools::wallet::SOL_MINT {
+                        if let Ok(sig) =
+                            crate::tools::bollinger::exit_signals(config, &base_mint).await
+                        {
+                            let rsi_hit = sig
+                                .rsi
+                                .map(|r| r >= config.management.exit_rsi_threshold)
+                                .unwrap_or(false);
+                            let bb_hit = sig
+                                .percent_b
+                                .map(|b| b >= config.management.exit_bb_upper_pctb)
+                                .unwrap_or(false);
+                            if rsi_hit || bb_hit {
+                                let reason = format!(
+                                    "over-extended take-profit (RSI {:.0} / %B {:.2}, +{:.1}%)",
+                                    sig.rsi.unwrap_or(0.0),
+                                    sig.percent_b.unwrap_or(0.0),
+                                    pnl
+                                );
+                                info("pnl_poll", &format!("{} — {}", snapshot.id, reason));
+                                exits_needed.push((snapshot.id.clone(), reason));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Update OOR state
         if !snapshot.in_range {
             positions.mark_oor(&snapshot.id);

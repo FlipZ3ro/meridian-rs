@@ -1084,6 +1084,10 @@ mod tests {
                 min_fee_per_tvl_24h: 0.0005,
                 min_age_before_yield_check: 60,
                 out_of_range_bins_to_close: 50,
+                exit_overextended_enabled: true,
+                exit_rsi_threshold: 90.0,
+                exit_bb_upper_pctb: 1.0,
+                exit_min_profit_pct: 0.0,
                 sol_mode: false,
             },
             risk: RiskConfig {

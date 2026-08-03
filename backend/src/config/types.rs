@@ -225,9 +225,31 @@ pub struct ManagementConfig {
     // ── Pump / OOR bins ──────────────────────────────────────
     #[serde(default = "default_out_of_range_bins_to_close")]
     pub out_of_range_bins_to_close: i32,
+    // ── Over-extension take-profit exit (Evil Panda) ─────────
+    // Bank the bounce when the base token is over-extended to the upside:
+    // RSI(2) >= threshold OR Bollinger %B >= upper. Only fires when the
+    // position is in profit (>= exit_min_profit_pct) so it never realizes a loss.
+    #[serde(default = "default_exit_overextended_enabled")]
+    pub exit_overextended_enabled: bool,
+    #[serde(default = "default_exit_rsi_threshold")]
+    pub exit_rsi_threshold: f64,
+    #[serde(default = "default_exit_bb_upper_pctb")]
+    pub exit_bb_upper_pctb: f64,
+    #[serde(default)]
+    pub exit_min_profit_pct: f64,
     // ── Display mode ─────────────────────────────────────────
     #[serde(default)]
     pub sol_mode: bool,
+}
+
+fn default_exit_overextended_enabled() -> bool {
+    true
+}
+fn default_exit_rsi_threshold() -> f64 {
+    90.0
+}
+fn default_exit_bb_upper_pctb() -> f64 {
+    1.0
 }
 
 fn default_management_interval() -> u32 {
@@ -722,6 +744,10 @@ impl Default for Config {
                 min_fee_per_tvl_24h: 0.0005,
                 min_age_before_yield_check: 60,
                 out_of_range_bins_to_close: 50,
+                exit_overextended_enabled: default_exit_overextended_enabled(),
+                exit_rsi_threshold: default_exit_rsi_threshold(),
+                exit_bb_upper_pctb: default_exit_bb_upper_pctb(),
+                exit_min_profit_pct: 0.0,
                 sol_mode: false,
             },
             risk: RiskConfig {
