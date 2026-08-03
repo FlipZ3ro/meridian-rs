@@ -826,6 +826,29 @@ mod tests {
         assert_eq!(pubkey, keypair.pubkey().to_string());
     }
 
+    /// Phase-1 smoke test: run the official-commons quote against a REAL mainnet
+    /// DLMM position (SOL/USDC pool) and assert it decodes + parses to non-zero
+    /// state. Read-only, no wallet. Hits mainnet, so it's #[ignore] — run with:
+    ///   cargo test --release quote_commons_smoke -- --ignored --nocapture
+    /// Override RPC via HELIUS_RPC_URL / RPC_URL env if the public one throttles.
+    #[tokio::test]
+    #[ignore]
+    async fn quote_commons_smoke() {
+        let config = crate::config::Config::default();
+        let position = "13yTvyE1WFoEuzJcFedAZwULjf1Mg9XDdygFbh3MDQ8";
+        let q = quote_position_state_commons(position, &config)
+            .await
+            .expect("commons quote should succeed against a live position");
+        println!(
+            "COMMONS QUOTE {position}: liq_x={} liq_y={} fee_x={} fee_y={}",
+            q.liquidity_x, q.liquidity_y, q.fee_x, q.fee_y
+        );
+        assert!(
+            q.liquidity_x > 0 || q.liquidity_y > 0 || q.fee_x > 0 || q.fee_y > 0,
+            "expected non-zero position state from a live position"
+        );
+    }
+
     #[test]
     fn close_wsol_account_ix_has_correct_shape() {
         let token_program = Pubkey::from_str(SPL_TOKEN_PROGRAM_ID).unwrap();
