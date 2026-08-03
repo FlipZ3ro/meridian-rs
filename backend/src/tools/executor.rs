@@ -639,6 +639,21 @@ impl ToolExecutor {
                                     );
                                 }
 
+                                // Flush gate: don't deploy into a token that's
+                                // still free-falling (dropped hard AND pinned to
+                                // fresh lows). Single-side SOL-below into a
+                                // continuing dump = the position fills with a
+                                // knife-catching token and rides it down (IL).
+                                // Wait for exhaustion (a lift off the low).
+                                if matches!(
+                                    signals.flush,
+                                    Some(crate::tools::bollinger::FlushState::Freefall)
+                                ) {
+                                    anyhow::bail!(
+                                        "freefall — token still making fresh lows after a flush; waiting for exhaustion/bounce setup"
+                                    );
+                                }
+
                                 // BB %B gate: only enter when price is over-extended
                                 // (pullback into our SOL-below range is more likely).
                                 match signals.percent_b {

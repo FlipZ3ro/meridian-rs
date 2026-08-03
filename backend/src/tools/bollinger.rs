@@ -26,6 +26,14 @@ const BB_PERIOD: usize = 20;
 
 /// Candles per window for the volume-trend comparison (12 × 5m = 1h).
 const VOL_TREND_WINDOW: usize = 12;
+// Flush / exhaustion detection: over the last FLUSH_WINDOW candles, a drop of
+// ≥ FLUSH_MIN_DRAWDOWN from the window high counts as a "flush". If price is
+// still pinned to the window low (< FLUSH_STABILIZE_MIN above it) it's freefall
+// (skip — falling knife); once it's lifted off the low it's exhaustion (a valid
+// dip-buy setup for our single-side SOL-below range).
+const FLUSH_WINDOW: usize = 24;
+const FLUSH_MIN_DRAWDOWN: f64 = 0.08;
+const FLUSH_STABILIZE_MIN: f64 = 0.02;
 
 /// Volume momentum of a pool's token, derived from OHLCV. In a DLMM, fees come
 /// from volume — slowing volume is the single signal that (per large-sample
@@ -47,10 +55,48 @@ impl VolumeTrend {
     }
 }
 
+/// Recent-move regime for timing single-side dip-buys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlushState {
+    /// Dropped hard and still making fresh lows — a falling knife; don't deploy.
+    Freefall,
+    /// Dropped hard then lifted off the low — capitulation likely done; a good
+    /// mean-reversion dip-buy setup.
+    Exhaustion,
+    /// No significant recent drop — not a flush situation; other gates decide.
+    Normal,
+}
+
 /// Both entry-timing signals computed from one OHLCV fetch.
 pub struct EntrySignals {
     pub percent_b: Option<f64>,
     pub volume_trend: Option<VolumeTrend>,
+    pub flush: Option<FlushState>,
+}
+
+/// Classify the recent price action into a flush regime from closes
+/// (oldest→newest). None if there aren't enough candles.
+pub fn flush_state(closes: &[f64], window: usize) -> Option<FlushState> {
+    if window == 0 || closes.len() < window {
+        return None;
+    }
+    let w = &closes[closes.len() - window..];
+    let hi = w.iter().cloned().fold(f64::MIN, f64::max);
+    let lo = w.iter().cloned().fold(f64::MAX, f64::min);
+    let cur = *closes.last()?;
+    if hi <= 0.0 || lo <= 0.0 {
+        return None;
+    }
+    let drawdown = (hi - cur) / hi; // how far below the window high
+    if drawdown < FLUSH_MIN_DRAWDOWN {
+        return Some(FlushState::Normal);
+    }
+    let off_low = (cur - lo) / lo; // how far above the window low
+    Some(if off_low < FLUSH_STABILIZE_MIN {
+        FlushState::Freefall
+    } else {
+        FlushState::Exhaustion
+    })
 }
 
 /// Fetch recent (oldest→newest) closes and volumes for a token mint.
@@ -168,6 +214,7 @@ pub async fn entry_signals(config: &Config, mint: &str) -> Result<EntrySignals> 
     Ok(EntrySignals {
         percent_b: percent_b(&closes, BB_PERIOD),
         volume_trend: volume_trend(&volumes),
+        flush: flush_state(&closes, FLUSH_WINDOW),
     })
 }
 
