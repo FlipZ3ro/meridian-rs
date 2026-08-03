@@ -31,6 +31,10 @@ wp-solana-meteora-dlmm-core = "0.1.2"
 wp-solana-meteora-dlmm-sdk = "0.1.2"
 wp-solana-rpc = "0.1.1"
 
+# Phase 0 build spike: official Meteora Rust building blocks (git). Declared only
+# to test dependency co-resolution + compilation alongside the current tree.
+commons = { git = "https://github.com/MeteoraAg/dlmm-sdk", rev = "fb02e51a" }
+
 # Web Framework
 axum = "0.7"
 tower-http = { version = "0.5", features = ["cors"] }
