@@ -18,6 +18,12 @@ const SYNC_GRACE_MS: i64 = 5 * 60_000;
 const PEAK_CONFIRMATION_WAIT_SECONDS: u64 = 15;
 const TRAILING_DROP_CONFIRMATION_WAIT_SECONDS: u64 = 15;
 const TRAILING_EXIT_WINDOW_MS: i64 = 30_000;
+/// OOR-below positions hold the depreciated token and recover if price bounces
+/// back into range, so we don't dump them at the low on the timer alone. Close
+/// only when losing at least this much (recovery unlikely) …
+const OOR_CLOSE_LOSS_PCT: f64 = -4.0;
+/// … or after this many times the OOR wait, to free stuck capital regardless.
+const OOR_MAX_HOLD_MULT: u32 = 3;
 static STATE_SAVE_LOCK: Mutex<()> = Mutex::new(());
 
 // ─── Position Status ────────────────────────────────────────────
@@ -744,8 +750,19 @@ pub fn get_deterministic_close_rule(
     // the reliable trigger. The old `active_bin > upper_bin` guard was broken:
     // stored bins are relative while the live active_bin is absolute/placeholder,
     // so it never matched and OOR positions were never closed.
+    // A single-side SOL-below position that goes OOR now holds the depreciated
+    // base token; if price bounces back into range the token converts back to
+    // SOL and the IL recovers. So don't dump it at the low on the timer alone —
+    // close only when it's a real loss (recovery unlikely) or it's been dead far
+    // too long (free the capital). Stop-loss still cuts hard losers, and
+    // PumpedAboveRange (above) handles the no-IL OOR-above case.
     if minutes_out_of_range >= config.management.out_of_range_wait_minutes {
-        return Some(CloseRule::OutOfRange);
+        let dead_too_long = minutes_out_of_range
+            >= config.management.out_of_range_wait_minutes * OOR_MAX_HOLD_MULT;
+        if pnl_pct <= OOR_CLOSE_LOSS_PCT || dead_too_long {
+            return Some(CloseRule::OutOfRange);
+        }
+        // else: OOR but recoverable (near breakeven) — hold for the bounce.
     }
 
     // ── Rule 5: Low Yield ────────────────────────────────────────
@@ -1247,7 +1264,9 @@ mod tests {
         let config = test_config();
         let mut pos = test_position();
         pos.upper_bin = 10;
-        let rule = get_deterministic_close_rule(&pos, 15, 0.0, 0.01, 30, &config);
+        // OOR now closes only when it's a real loss (recovery unlikely) or dead
+        // too long — a −5% OOR position exercises the loss path.
+        let rule = get_deterministic_close_rule(&pos, 15, -5.0, 0.01, 30, &config);
         assert_eq!(rule, Some(CloseRule::OutOfRange));
     }
 
