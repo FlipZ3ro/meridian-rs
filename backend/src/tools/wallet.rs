@@ -819,6 +819,84 @@ pub async fn execute_swap(
     })
 }
 
+/// Minimum seconds between dust sweeps — bounds cost and avoids hammering
+/// Jupiter with unroutable dust every management cycle.
+const DUST_SWEEP_COOLDOWN_SECS: u64 = 900; // 15 min
+
+fn dust_sweep_gate() -> &'static std::sync::Mutex<Option<std::time::Instant>> {
+    static G: std::sync::OnceLock<std::sync::Mutex<Option<std::time::Instant>>> =
+        std::sync::OnceLock::new();
+    G.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// Best-effort dust sweep: swap any non-SOL SPL token left in the wallet
+/// (leftovers from closed/adopted positions that the single post-close swap
+/// snapshot missed) back to SOL. Skips SOL/wSOL and the base mints of
+/// still-open positions (`keep_mints`). Never errors the caller; unroutable
+/// dust is logged and left for a later sweep. Self-throttled to
+/// `DUST_SWEEP_COOLDOWN_SECS`. Returns the number of tokens swapped.
+///
+/// Respects dry-run via `swap_token` (no real tx in DRY_RUN).
+pub async fn sweep_dust_to_sol(
+    config: &Config,
+    keep_mints: &std::collections::HashSet<String>,
+) -> usize {
+    // Throttle: bail if we swept recently. Lock is dropped before any await.
+    {
+        let mut last = match dust_sweep_gate().lock() {
+            Ok(g) => g,
+            Err(_) => return 0,
+        };
+        if let Some(prev) = *last {
+            if prev.elapsed().as_secs() < DUST_SWEEP_COOLDOWN_SECS {
+                return 0;
+            }
+        }
+        *last = Some(std::time::Instant::now());
+    }
+
+    let wallet = std::env::var("MERIDIAN_WALLET")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| crate::tools::meteora_native::wallet_pubkey_from_env().ok())
+        .unwrap_or_default();
+    if wallet.is_empty() {
+        return 0;
+    }
+    let rpc = crate::tools::meteora_native::resolve_rpc_url(config);
+    let balances = match get_wallet_balances(&rpc, &wallet, "").await {
+        Ok(b) => b,
+        Err(_) => return 0,
+    };
+
+    let mut swept = 0usize;
+    for t in &balances.tokens {
+        let mint = normalize_mint(&t.mint);
+        if mint == SOL_MINT || t.balance <= 0.0 {
+            continue;
+        }
+        if keep_mints.contains(&mint) || keep_mints.contains(&t.mint) {
+            continue; // base token of an open position — leave it
+        }
+        crate::utils::logger::module::info(
+            "dust",
+            &format!("sweeping {} {} → SOL", t.balance, t.symbol),
+        );
+        match swap_token(&t.mint, t.balance, 300, 100, config).await {
+            Ok(s) if s.success => swept += 1,
+            Ok(_) => crate::utils::logger::module::warn(
+                "dust",
+                &format!("{} not routable yet (dust) — will retry later", t.symbol),
+            ),
+            Err(e) => crate::utils::logger::module::warn(
+                "dust",
+                &format!("swap {} failed: {}", t.symbol, e),
+            ),
+        }
+    }
+    swept
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

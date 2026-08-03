@@ -159,6 +159,24 @@ pub async fn run_management_cycle(
 
     // ── 2. Fetch real PnL + active_bin for each position ────────
     let active = positions.get_active();
+
+    // Dust sweep (self-throttled ~15min): swap leftover non-SOL tokens from
+    // closed/adopted positions back to SOL. The per-close auto-swap only sweeps
+    // what's in the wallet at close time; late fee-claim inflows and
+    // adopted-position closes can leave residual token dust this catches. Skips
+    // base mints of still-open positions so it never touches live inventory.
+    {
+        let keep: std::collections::HashSet<String> =
+            active.iter().map(|p| p.base_mint.clone()).collect();
+        let swept = crate::tools::wallet::sweep_dust_to_sol(config, &keep).await;
+        if swept > 0 {
+            info(
+                "cycle",
+                &format!("dust sweep: swapped {} leftover token(s) back to SOL", swept),
+            );
+        }
+    }
+
     let mut pos_snapshots: Vec<ManagementPositionSnapshot> = Vec::new();
 
     for p in &active {
