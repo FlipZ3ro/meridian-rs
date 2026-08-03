@@ -652,6 +652,38 @@ pub async fn existing_positions(
             }
         }
     }
+
+    // Re-verify anything the first bulk call reported missing with a SECOND
+    // targeted fetch. `get_multiple_accounts` intermittently returns null for
+    // accounts that DO exist (RPC node inconsistency/lag), which previously
+    // false-pruned live positions → they escaped stop-loss/OOR and bled out.
+    // Only conclude "gone" when the retry ALSO finds nothing; on an RPC error
+    // treat all as present so a flaky call never prunes a real position.
+    let missing: Vec<(String, Pubkey)> = parsed
+        .iter()
+        .filter(|(id, _)| !existing.contains(id))
+        .cloned()
+        .collect();
+    if !missing.is_empty() {
+        let pubkeys: Vec<Pubkey> = missing.iter().map(|(_, pk)| *pk).collect();
+        match rpc.get_multiple_accounts(&pubkeys).await {
+            Ok(accounts) => {
+                for ((id, _), account) in missing.iter().zip(accounts.into_iter()) {
+                    if account.map(|a| a.lamports > 0).unwrap_or(false) {
+                        existing.insert(id.clone()); // exists — first call was wrong
+                    }
+                    // None on retry too → genuinely gone; leave unmarked (prunable).
+                }
+            }
+            Err(_) => {
+                // RPC error on retry → ambiguous → keep all (never false-prune).
+                for (id, _) in &missing {
+                    existing.insert(id.clone());
+                }
+            }
+        }
+    }
+
     Ok(existing)
 }
 
