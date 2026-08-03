@@ -251,6 +251,27 @@ async fn scan_and_enter(config: &Config, wallet: &str) {
                     );
                     return;
                 }
+                // Holder-distribution gate (same as the LLM agent's pre-flight).
+                let thr = config.gmgn.max_top10_holder_rate;
+                if thr > 0.0 && thr < 1.0 {
+                    let rate = if sec.top_10_holder_rate > 1.0 {
+                        sec.top_10_holder_rate / 100.0
+                    } else {
+                        sec.top_10_holder_rate
+                    };
+                    if rate > thr {
+                        info(
+                            "quickflip",
+                            &format!(
+                                "skip {} — top-10 holders {:.0}% > {:.0}% limit",
+                                symbol,
+                                rate * 100.0,
+                                thr * 100.0
+                            ),
+                        );
+                        return;
+                    }
+                }
             }
         }
     }

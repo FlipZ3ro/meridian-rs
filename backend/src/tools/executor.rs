@@ -726,6 +726,24 @@ impl ToolExecutor {
                                     "GMGN: freeze authority not renounced (can freeze your tokens) — skipping"
                                 );
                             }
+                            // Holder-distribution gate: concentrated top-10 holders
+                            // are the strongest rug signal. Rate is normalized to a
+                            // fraction (GMGN sometimes returns a percentage).
+                            let thr = config.gmgn.max_top10_holder_rate;
+                            if thr > 0.0 && thr < 1.0 {
+                                let rate = if sec.top_10_holder_rate > 1.0 {
+                                    sec.top_10_holder_rate / 100.0
+                                } else {
+                                    sec.top_10_holder_rate
+                                };
+                                if rate > thr {
+                                    anyhow::bail!(
+                                        "GMGN: top-10 holders control {:.0}% (> {:.0}% limit) — rug/dump risk, skipping",
+                                        rate * 100.0,
+                                        thr * 100.0
+                                    );
+                                }
+                            }
                             info(
                                 "executor",
                                 &format!(

@@ -505,6 +505,11 @@ pub struct GmgnConfig {
     pub request_delay_ms: u64,
     #[serde(default = "default_gmgn_max_retries")]
     pub max_retries: u32,
+    /// Reject a token whose top-10 holders control more than this fraction
+    /// (0.0–1.0) of supply — concentrated holders are the strongest rug signal.
+    /// Set to 0 or >= 1.0 to disable the gate. Default 0.8 (only egregious).
+    #[serde(default = "default_gmgn_max_top10")]
+    pub max_top10_holder_rate: f64,
 }
 
 impl Default for GmgnConfig {
@@ -514,8 +519,13 @@ impl Default for GmgnConfig {
             base_url: default_gmgn_base_url(),
             request_delay_ms: default_gmgn_request_delay_ms(),
             max_retries: default_gmgn_max_retries(),
+            max_top10_holder_rate: default_gmgn_max_top10(),
         }
     }
+}
+
+fn default_gmgn_max_top10() -> f64 {
+    0.8
 }
 
 fn default_gmgn_base_url() -> String {
