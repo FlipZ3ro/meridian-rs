@@ -72,8 +72,16 @@ already wires: `initialize_position`, bin-array init (`bin_array_manager.rs`),
   build (`cargo check` 53s, exit 0). Biggest risk cleared. No separate `lb_clmm`
   crate needed — program bindings live inside `commons`. For Phase 1+, pin
   `rev = "fb02e51a"` instead of `branch = "main"`.
-- **Phase 1 — `quote_position_state`:** read-only, zero money risk; validates the
-  dep + quote parity vs wp on live positions.
+- **Phase 1 — `quote_position_state` ✅ DONE (compiles + smoke-passes):**
+  `quote_position_state_commons()` mirrors the official `cli/show_position.rs`
+  (fetch PositionV2 → derive bin-array PDAs → batch fetch → `DynamicPosition::parse`).
+  Uses solana **v2** types (`solana_sdk`/`solana_client`) to match commons —
+  compiles alongside our v3 tree with NO Pubkey/Account conversion. Real-chain
+  smoke test (`quote_commons_smoke`, #[ignore]) against a live mainnet SOL/USDC
+  position returns sane non-zero state (liq_x=165999999978). Env-gated parity
+  harness (`QUOTE_PARITY=1`) in `quote_position_state` logs wp-vs-commons side by
+  side; numeric A/B on our OWN position still pending an open position (wp quote
+  needs our authority). Interop friction is LOW — good signal for Phases 2-4.
 - **Phase 2 — `claim_fees`:** single ix, low risk.
 - **Phase 3 — `close_position`:** must return principal correctly; devnet + tiny live.
 - **Phase 4 — `deploy_position`:** highest; devnet + tiny-size live parity vs wp
