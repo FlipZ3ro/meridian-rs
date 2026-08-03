@@ -840,7 +840,7 @@ pub async fn execute_swap(
 /// Minimum seconds between dust sweeps — bounds cost and avoids hammering
 /// Jupiter with unroutable dust. Kept short so leftovers clear promptly; the
 /// management cadence (a few min) is the real pacing.
-const DUST_SWEEP_COOLDOWN_SECS: u64 = 120; // 2 min
+const DUST_SWEEP_COOLDOWN_SECS: u64 = 60; // 1 min
 
 fn dust_sweep_gate() -> &'static std::sync::Mutex<Option<std::time::Instant>> {
     static G: std::sync::OnceLock<std::sync::Mutex<Option<std::time::Instant>>> =

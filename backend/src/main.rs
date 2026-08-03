@@ -525,6 +525,22 @@ async fn main() -> Result<()> {
                     if let Err(e) = positions.save(&state_path_pnl) {
                         warn("pnl_poll", &format!("Failed to save poll state: {}", e));
                     }
+
+                    // Sweep leftover tokens / wSOL from just-closed positions back
+                    // to SOL promptly (self-throttled ~60s). Runs on the 30s poll,
+                    // not just the 3-min management cycle, so a closed position's
+                    // residual doesn't sit as floating-loss inventory for minutes.
+                    let swept = crate::tools::wallet::sweep_dust_to_sol(
+                        &config_pnl,
+                        &std::collections::HashSet::new(),
+                    )
+                    .await;
+                    if swept > 0 {
+                        info(
+                            "pnl_poll",
+                            &format!("dust sweep: cleared {} leftover(s) to SOL", swept),
+                        );
+                    }
                 }
                 Err(e) => {
                     warn("pnl_poll", &format!("PnL poll error: {}", e));
