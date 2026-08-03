@@ -416,11 +416,115 @@ pub async fn quote_position_state(position_address: &str, config: &Config) -> Re
     let plan_config = WorkspacePlanConfig::default();
     let plan = plan_close_position(&snapshot, params, &plan_config)
         .map_err(|e| anyhow!("plan position quote: {}", e))?;
-    Ok(PositionQuote {
+    let wp_quote = PositionQuote {
         liquidity_x: plan.quote.remove_liquidity_amount_x,
         liquidity_y: plan.quote.remove_liquidity_amount_y,
         fee_x: plan.quote.claimable_fee_x,
         fee_y: plan.quote.claimable_fee_y,
+    };
+
+    // Phase-1 migration parity harness (opt-in via QUOTE_PARITY=1): also run the
+    // official-commons quote and log both side by side. Zero behavior change —
+    // we still return the wp result. Lets us confirm numeric parity on a live
+    // position before cutting `quote_position_state` over to commons.
+    if std::env::var("QUOTE_PARITY").as_deref() == Ok("1") {
+        match quote_position_state_commons(position_address, config).await {
+            Ok(c) => tracing::info!(
+                target: "quote_parity",
+                position = %position_address,
+                wp_liq_x = wp_quote.liquidity_x, cm_liq_x = c.liquidity_x,
+                wp_liq_y = wp_quote.liquidity_y, cm_liq_y = c.liquidity_y,
+                wp_fee_x = wp_quote.fee_x, cm_fee_x = c.fee_x,
+                wp_fee_y = wp_quote.fee_y, cm_fee_y = c.fee_y,
+                match_ = (wp_quote == c),
+                "wp vs commons quote"
+            ),
+            Err(e) => tracing::warn!(target: "quote_parity", "commons quote failed: {}", e),
+        }
+    }
+
+    Ok(wp_quote)
+}
+
+/// Phase 1 (commons migration): read-only position quote via the OFFICIAL
+/// MeteoraAg `commons` crate instead of wp-solana. Mirrors the official
+/// `cli/show_position.rs`. Returns the same `PositionQuote` shape.
+///
+/// Uses solana v2 types throughout (`solana_sdk` / `solana_client`, NOT the
+/// `*_v3` aliases) because `commons` is built against solana-program 2.x — its
+/// `Pubkey`/`Account` types must match at the call boundary.
+pub async fn quote_position_state_commons(
+    position_address: &str,
+    config: &Config,
+) -> Result<PositionQuote> {
+    use commons::dlmm::accounts::{BinArray, LbPair as CLbPair, PositionV2};
+    use commons::extensions::bin_array::BinArrayExtension;
+    use commons::extensions::dynamic_position::DynamicPosition;
+    use solana_client::nonblocking::rpc_client::RpcClient as RpcClientV2;
+    use solana_sdk::pubkey::Pubkey as PubkeyV2;
+    use std::collections::HashMap;
+
+    let position_pk = PubkeyV2::from_str(position_address)
+        .map_err(|e| anyhow!("invalid position pubkey: {}", e))?;
+    let rpc = RpcClientV2::new(resolve_rpc_url(config));
+
+    // 1. Fetch + decode the position account (PositionV2).
+    let position_account = rpc.get_account(&position_pk).await?;
+    let position_state: PositionV2 =
+        commons::pod_read_unaligned_skip_disc(&position_account.data)
+            .map_err(|e| anyhow!("decode PositionV2: {}", e))?;
+
+    // 2. Bin-array index range the position spans.
+    let lower_idx = BinArray::bin_id_to_bin_array_index(position_state.lower_bin_id)
+        .map_err(|e| anyhow!("lower bin array index: {}", e))?;
+    let upper_idx = BinArray::bin_id_to_bin_array_index(position_state.upper_bin_id)
+        .map_err(|e| anyhow!("upper bin array index: {}", e))?;
+
+    // 3. Batch-fetch lb_pair + covered bin arrays.
+    let bin_array_pubkeys: Vec<PubkeyV2> = (lower_idx..=upper_idx)
+        .map(|idx| commons::derive_bin_array_pda(position_state.lb_pair, idx.into()).0)
+        .collect();
+    let to_fetch: Vec<PubkeyV2> =
+        [vec![position_state.lb_pair], bin_array_pubkeys].concat();
+    let fetched = rpc.get_multiple_accounts(&to_fetch).await?;
+
+    // 4. Decode lb_pair.
+    let lb_pair_state: CLbPair = commons::pod_read_unaligned_skip_disc(
+        &fetched
+            .first()
+            .and_then(|a| a.as_ref())
+            .ok_or_else(|| anyhow!("lb_pair account missing"))?
+            .data,
+    )
+    .map_err(|e| anyhow!("decode LbPair: {}", e))?;
+
+    // 5. Build HashMap<i32, BinArray> keyed by bin-array index (skip missing).
+    let mut bin_array_map: HashMap<i32, BinArray> = HashMap::new();
+    for (i, idx) in (lower_idx..=upper_idx).enumerate() {
+        if let Some(acc) = fetched.get(1 + i).and_then(|a| a.as_ref()) {
+            let ba: BinArray = commons::pod_read_unaligned_skip_disc(&acc.data)
+                .map_err(|e| anyhow!("decode BinArray: {}", e))?;
+            bin_array_map.insert(idx, ba);
+        }
+    }
+
+    // 6. Parse. Timestamp only affects reward accrual (not amounts/fees), so a
+    // Unix-now value is sufficient — avoids a Clock sysvar fetch + bincode.
+    let now_ts = chrono::Utc::now().timestamp();
+    let dp = DynamicPosition::parse(
+        &position_state,
+        &position_account.data,
+        &lb_pair_state,
+        &bin_array_map,
+        now_ts,
+    )
+    .map_err(|e| anyhow!("commons DynamicPosition::parse: {}", e))?;
+
+    Ok(PositionQuote {
+        liquidity_x: dp.total_x_amount,
+        liquidity_y: dp.total_y_amount,
+        fee_x: dp.fee_x,
+        fee_y: dp.fee_y,
     })
 }
 
