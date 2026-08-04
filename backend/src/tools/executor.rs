@@ -74,6 +74,20 @@ fn set_json_string_if_missing(value: &mut Value, key: &str, content: Option<&str
     }
 }
 
+/// True when a close reason represents a risk cut (the position was closed
+/// because it was losing), as opposed to a take-profit or a range exit. Matched
+/// on the reason text because the deterministic pnl-poll closes pass their rule
+/// name through as free text (e.g. "auto-close (pnl_poll): stop loss"). These
+/// always deserve a re-entry cooldown regardless of whether a pnl figure was
+/// available at close time.
+fn is_risk_cut_reason(reason: &str) -> bool {
+    let reason = reason.to_ascii_lowercase();
+    reason.contains("stop loss")
+        || reason.contains("stop-loss")
+        || reason.contains("stoploss")
+        || reason.contains("safety exit")
+}
+
 fn find_tracked_position<'a>(
     args: &Value,
     positions: &'a PositionState,
@@ -991,23 +1005,39 @@ impl ToolExecutor {
                     }
                 }
 
-                // Set cooldown on loss closes to prevent re-entry
-                if let Some(pos) = positions.positions.get(pid) {
-                    if let Some(pnl) = pos.pnl_sol {
-                        if pnl < 0.0 {
-                            // Cooldown pool for 1 hour
-                            pool_memory.set_pool_cooldown(&pos.pool_address, "loss_close", 60);
-                            // Cooldown token too
-                            pool_memory.set_base_mint_cooldown_minutes(
-                                &pos.base_mint,
-                                60,
-                                "loss_close",
-                            );
-                            info(
-                                "executor",
-                                &format!("Set 1h cooldown on pool/token after {:.4} SOL loss", pnl),
-                            );
-                        }
+                // Set cooldown on loss closes to prevent re-entry.
+                //
+                // A risk-cut close (stop loss / safety exit) ALWAYS cools the pool
+                // and token down, even when pnl_sol was never populated — it stays
+                // None whenever the position quote failed, which is permanent for
+                // Token-2022 positions. Gating solely on `pnl_sol < 0` meant those
+                // stop-losses set NO cooldown at all (the other cooldown paths in
+                // pool_memory need an OOR reason or `pnl_pct.is_some()`), so the
+                // screener re-entered the same dumping token minutes later: CATE
+                // stopped out twice inside 40 minutes, 2m50s apart, with zero fees.
+                //
+                // Uses find_tracked_position so a close addressed by
+                // position_address (pid empty) is covered too — that silently
+                // skipped the cooldown before.
+                if let Some(pos) = find_tracked_position(args, positions) {
+                    let reason = args["reason"].as_str().unwrap_or("");
+                    let risk_cut = is_risk_cut_reason(reason);
+                    let known_loss = pos.pnl_sol.is_some_and(|pnl| pnl < 0.0);
+                    if risk_cut || known_loss {
+                        let pool_address = pos.pool_address.clone();
+                        let base_mint = pos.base_mint.clone();
+                        let detail = match pos.pnl_sol {
+                            Some(pnl) => format!("{:.4} SOL loss", pnl),
+                            None => format!("risk-cut close ({}), pnl unknown", reason),
+                        };
+                        // Cooldown pool for 1 hour
+                        pool_memory.set_pool_cooldown(&pool_address, "loss_close", 60);
+                        // Cooldown token too
+                        pool_memory.set_base_mint_cooldown_minutes(&base_mint, 60, "loss_close");
+                        info(
+                            "executor",
+                            &format!("Set 1h cooldown on pool/token after {}", detail),
+                        );
                     }
                 }
 
