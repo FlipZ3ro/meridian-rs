@@ -1934,17 +1934,20 @@ impl ToolExecutor {
                 if position.is_empty() {
                     anyhow::bail!("position_id or position_address required");
                 }
-                let skip_swap = args["skip_swap"]
-                    .as_bool()
-                    .or_else(|| args["skipSwap"].as_bool())
-                    .unwrap_or(false);
                 match claim_fees(position, config).await {
                     Ok(claim) => {
-                        // Same as close: swap the claimed base token back to SOL
-                        // so harvested fees compound instead of piling up as dust.
+                        // Do NOT auto-swap the claimed base token here. claim_fees
+                        // only ever runs on a STILL-OPEN position, and swapping the
+                        // claimed memecoin to SOL closes/races that position's
+                        // token_y ATA — which the position's next claim/close then
+                        // needs, failing with AccountNotInitialized and getting the
+                        // position stuck retrying every poll. Let the claimed fees
+                        // sit in the ATA (keeping it alive); the post-close
+                        // auto-swap reads the full wallet balance, so accumulated
+                        // fees are swept to SOL when the position finally closes.
                         let mut result = serde_json::to_value(&claim)?;
                         enrich_close_result_with_position_metadata(&mut result, args, positions);
-                        self.maybe_auto_swap_base_to_sol(&mut result, skip_swap, config)
+                        self.maybe_auto_swap_base_to_sol(&mut result, true, config)
                             .await?;
                         Ok(serde_json::to_string_pretty(&result)?)
                     }
