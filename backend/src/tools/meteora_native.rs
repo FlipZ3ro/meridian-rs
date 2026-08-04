@@ -600,7 +600,10 @@ fn create_ata_idempotent_ix(
             AccountMeta::new(ata, false),                     // ATA to create (writable)
             AccountMeta::new_readonly(*owner, false),         // wallet that owns the ATA
             AccountMeta::new_readonly(*mint, false),          // token mint
-            AccountMeta::new_readonly(solana_sdk_v3::system_program::id(), false),
+            AccountMeta::new_readonly(
+                Pubkey::from_str("11111111111111111111111111111111").expect("valid system program id"),
+                false,
+            ),
             AccountMeta::new_readonly(*token_program, false), // SPL or Token-2022
         ],
         data: vec![ATA_CREATE_IDEMPOTENT_IX],
