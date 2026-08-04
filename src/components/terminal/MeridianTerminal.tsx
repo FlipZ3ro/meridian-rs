@@ -10,7 +10,7 @@ import { RadarPane } from './panes/RadarPane';
 import { LogPane } from './panes/LogPane';
 import { ChartsPane } from './panes/ChartsPane';
 import { SettingsPane } from './panes/SettingsPane';
-import { plainUsd, shortAddr } from '../../lib/meridianFormat';
+import { plainUsd, pctText, shortAddr } from '../../lib/meridianFormat';
 
 type ScreenId = 'overview' | 'positions' | 'portfolio' | 'candidates' | 'log' | 'charts' | 'settings';
 type NavMode = 'tabs' | 'rail' | 'zen';
@@ -242,12 +242,18 @@ export default function MeridianTerminal() {
 
   const screenLabel = useMemo(() => (SCREENS.find((s) => s[0] === screen) ?? ['', ''])[1], [screen]);
 
+  const pnlColor = Number(summary.totalPnlUsd ?? 0) >= 0 ? 'var(--green)' : 'var(--red)';
+
+  // Rail mode has no hero cell, so its VITALS box keeps PnL inline with the
+  // rest. The strip promotes PnL out of this list and shows the remainder as a
+  // metadata cluster.
   const vitals = [
     { label: 'TRADES', value: String(summary.closedCount ?? 0), color: 'var(--bright)' },
-    { label: 'PNL', value: plainUsd(summary.totalPnlUsd), color: Number(summary.totalPnlUsd ?? 0) >= 0 ? 'var(--green)' : 'var(--red)' },
+    { label: 'PNL', value: plainUsd(summary.totalPnlUsd), color: pnlColor },
     { label: 'OPEN', value: String(status?.active_positions ?? positions.length), color: 'var(--bright)' },
     { label: 'WIN RATE', value: `${Number(summary.winRate ?? 0).toFixed(0)}%`, color: 'var(--green)' },
   ];
+  const stripMetrics = vitals.filter((v) => v.label !== 'PNL');
 
   const navButtons = (small = false) => (
     <>
@@ -363,20 +369,23 @@ export default function MeridianTerminal() {
           <div className="mrd-scroll">
             {nav !== 'rail' ? (
               <div className="mrd-vitalstrip">
-                <div className="cell" style={{ minWidth: 160 }}>
-                  <span className="k">USER</span>
-                  <span className="v" style={{ color: 'var(--bright)', letterSpacing: '.1em' }}>OxRapzz</span>
+                <div className="cell hero">
+                  <span className="k">TOTAL PNL</span>
+                  <span className="v" style={{ color: pnlColor }}>{plainUsd(summary.totalPnlUsd)}</span>
+                  <span className="sub" style={{ color: pnlColor }}>{pctText(summary.totalPnlPct)}</span>
                 </div>
-                <div className="cell" style={{ minWidth: 150 }}>
+                <div className="cell wallet">
                   <span className="k">WALLET</span>
-                  <span className="v" style={{ color: 'var(--green)' }}>◎ {walletText} SOL</span>
+                  <span className="v" style={{ color: 'var(--green)' }}>◎ {walletText}</span>
                 </div>
-                {vitals.map((v) => (
-                  <div className="cell" key={v.label}>
-                    <span className="k">{v.label}</span>
-                    <span className="v" style={{ color: v.color }}>{v.value}</span>
-                  </div>
-                ))}
+                <div className="metrics">
+                  {stripMetrics.map((v) => (
+                    <div className="m" key={v.label}>
+                      <span className="k">{v.label}</span>
+                      <span className="v" style={{ color: v.color }}>{v.value}</span>
+                    </div>
+                  ))}
+                </div>
                 <div className="flags">
                   <span className="flag live">{status?.dry_run ? 'DRY RUN' : 'LIVE'}</span>
                   <span className="flag open">{positions.length} OPEN</span>

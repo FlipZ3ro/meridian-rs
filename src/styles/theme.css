@@ -3,7 +3,7 @@
    terminal dashboard. All families load from this single @import because it must
    be the first rule of the first stylesheet — a second @import in terminal.css
    would land after these rules once the CSS is bundled and be dropped. */
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,600;9..144,800&family=Geist+Mono:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,600;9..144,800&family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700;800&family=Martian+Mono:wght@400;500;600;700;800&display=swap');
 
 :root {
   --bg: #070d16;

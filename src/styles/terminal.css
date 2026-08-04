@@ -1,6 +1,13 @@
 /* Meridian Terminal (webv2) — a single tmux/TUI-style dashboard.
-   Geist Mono / IBM Plex Mono load from theme.css's @import (see the note there);
-   a second @import here would be dropped once the CSS is bundled. */
+   Fonts load from theme.css's @import (see the note there); a second @import
+   here would be dropped once the CSS is bundled.
+
+   Two faces, deliberately paired rather than one mono everywhere:
+   Martian Mono is wide and mechanical, so it carries structure — brand, panel
+   labels, column heads, nav. JetBrains Mono has the better numerals, so it
+   carries every value the operator actually reads. Martian is already wide by
+   design, so tracking on it stays low; the old .2em was tuned for a narrow
+   face and would blow the label rows apart here. */
 
 .mrd {
   --bg: #04070c;
@@ -39,6 +46,9 @@
   --z-shell: 100;
   --z-overlay: 50;
 
+  --font-data: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-display: "Martian Mono", "JetBrains Mono", ui-monospace, monospace;
+
   position: fixed;
   inset: 0;
   display: flex;
@@ -51,10 +61,37 @@
   z-index: var(--z-shell);
   background: var(--bg);
   color: var(--text);
-  font-family: "Geist Mono", "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-data);
   font-variant-numeric: tabular-nums;
   font-size: 12px;
   -webkit-font-smoothing: antialiased;
+}
+
+/* Structural type: anything that frames data rather than being data. Martian
+   Mono is wide enough on its own that these all run tighter than the values. */
+.mrd-brand,
+.mrd-panel-label,
+.mrd-panel-right,
+.mrd-tab .label,
+.mrd-rail-btn,
+.mrd-navmode,
+.mrd-navmode-btn,
+.mrd-postab,
+.mrd-pos-head,
+.mrd-cand-head,
+.mrd-pf-head,
+.mrd-log-full-head,
+.mrd-postabs-note,
+.mrd-vitalstrip .k,
+.mrd-vital-row .k,
+.mrd-pf-summary .cell .k,
+.mrd-set-kv .k,
+.mrd-charts-head .title,
+.mrd-hints,
+.flag,
+.badge-live,
+.mrd-log-badge {
+  font-family: var(--font-display);
 }
 
 .mrd *,
@@ -244,10 +281,17 @@
 
 .mrd-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; }
 
-/* ── Vital strip (tabs/zen modes) ────────────────────────────────────── */
+/* ── Vital strip (tabs/zen modes) ────────────────────────────────────────
+   Deliberately bimodal: PnL is the number the operator actually looks up at,
+   so it runs 3–4× everything else. A uniform row of 14px cells read as flat
+   and gave the page no focal point. */
 .mrd-vitalstrip {
-  position: relative; display: flex; flex-wrap: wrap; align-items: stretch;
-  border: 1px solid var(--line); background: var(--panel);
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  border: 1px solid var(--line);
+  background: var(--panel);
   margin-bottom: 14px;
 }
 .mrd-vitalstrip .cell {
@@ -255,9 +299,46 @@
   padding: 11px 16px; min-width: 120px;
   border-right: 1px solid var(--line-2);
 }
-.mrd-vitalstrip .cell .k { color: var(--dim); font-size: 9px; letter-spacing: .2em; }
+.mrd-vitalstrip .cell .k { color: var(--dim); font-size: 9px; letter-spacing: .12em; }
 .mrd-vitalstrip .cell .v { font-size: 14px; font-weight: 700; }
 .mrd-vitalstrip .flags { display: flex; align-items: center; gap: 7px; padding: 11px 16px; margin-left: auto; }
+
+/* Hero cell — the PnL readout. */
+.mrd-vitalstrip .cell.hero {
+  gap: 2px;
+  padding: 10px 22px 12px 16px;
+  min-width: 210px;
+  justify-content: center;
+}
+.mrd-vitalstrip .cell.hero .v {
+  font-family: var(--font-display);
+  font-size: clamp(26px, 3.4vw, 40px);
+  font-weight: 800;
+  line-height: .95;
+  letter-spacing: -.03em;
+}
+.mrd-vitalstrip .cell.hero .sub {
+  margin-top: 5px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .04em;
+}
+/* Wallet sits second in the hierarchy — bigger than metadata, smaller than PnL. */
+.mrd-vitalstrip .cell.wallet { min-width: 165px; justify-content: center; }
+.mrd-vitalstrip .cell.wallet .v { font-size: 19px; font-weight: 700; letter-spacing: -.01em; }
+/* The remaining metrics collapse into one tight cluster instead of four wide
+   cells, so the eye reads them as a block of metadata, not as four headlines. */
+.mrd-vitalstrip .metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(84px, auto));
+  gap: 2px 20px;
+  align-content: center;
+  padding: 10px 18px;
+  border-right: 1px solid var(--line-2);
+}
+.mrd-vitalstrip .metrics .m { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.mrd-vitalstrip .metrics .k { font-family: var(--font-display); color: var(--dim); font-size: 8.5px; letter-spacing: .1em; }
+.mrd-vitalstrip .metrics .v { font-size: 12px; font-weight: 700; }
 .flag { padding: 2px 7px; font-size: 9px; font-weight: 700; letter-spacing: .16em; }
 .flag.live { border: 1px solid #43371f; color: var(--amber); }
 .flag.open { border: 1px solid #1f3a2b; color: var(--green); }
@@ -291,10 +372,31 @@
   color: var(--faint); font-size: 9px; letter-spacing: .14em;
 }
 
-/* ── Overview layout ─────────────────────────────────────────────────── */
-.mrd-overview { display: flex; flex-wrap: wrap; gap: 14px; align-items: stretch; flex: 1 1 auto; min-height: 420px; }
-.mrd-ov-left { flex: 2 1 520px; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 14px; align-self: stretch; }
-.mrd-ov-right { flex: 1 1 340px; min-width: 0; min-height: 0; align-self: stretch; display: flex; flex-direction: column; }
+/* ── Overview layout ─────────────────────────────────────────────────────
+   Positions run full width: the table carries four dense columns (range,
+   liquidity legs, fee legs, PnL) and was the most cramped thing on the page
+   while squeezed into a 2fr column. Radar and log sit side by side underneath,
+   where narrower columns actually suit them. */
+.mrd-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.mrd-ov-bottom {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: stretch;
+  flex: 1 1 auto;
+  min-height: 260px;
+}
+.mrd-ov-bottom > * { min-width: 0; min-height: 0; }
+
+@media (max-width: 980px) {
+  .mrd-ov-bottom { grid-template-columns: minmax(0, 1fr); }
+}
 
 /* ── Positions ───────────────────────────────────────────────────────── */
 .mrd-postabs { display: flex; align-items: stretch; border-bottom: 1px solid var(--line-2); }
@@ -504,8 +606,49 @@
 .mrd-logo-img { width: 16px; height: 16px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
 .mrd-logo-letter { width: 16px; height: 16px; border-radius: 50%; flex-shrink: 0; background: linear-gradient(135deg,#2dd4bf,#8b5cf6); display: inline-flex; align-items: center; justify-content: center; font-size: 8px; font-weight: 800; color: #06121b; line-height: 1; font-style: normal; }
 
-/* Responsive: collapse rail into stacked layout on narrow screens */
+/* Tracking correction for the display face. Every value below replaces one that
+   was tuned for a narrow mono; Martian Mono carries that width in the glyphs
+   already, so re-applying .18–.2em here would break rows onto two lines. Kept
+   in one block at the end of the file so it wins on source order and the
+   correction stays reviewable in one place rather than scattered. */
+.mrd-brand { letter-spacing: .06em; }
+.mrd-panel-label { letter-spacing: .1em; }
+.mrd-panel-right { letter-spacing: .06em; }
+.mrd-tab { letter-spacing: .06em; }
+.mrd-rail-btn { letter-spacing: .05em; }
+.mrd-navmode,
+.mrd-navmode-btn { letter-spacing: .06em; }
+.mrd-postab { letter-spacing: .08em; }
+.mrd-pos-head,
+.mrd-cand-head,
+.mrd-pf-head,
+.mrd-log-full-head { letter-spacing: .08em; }
+.mrd-postabs-note { letter-spacing: .06em; }
+.mrd-vital-row .k,
+.mrd-pf-summary .cell .k,
+.mrd-set-kv .k { letter-spacing: .1em; }
+.mrd-charts-head .title { letter-spacing: .02em; }
+.mrd-hints { letter-spacing: .06em; }
+.flag,
+.badge-live { letter-spacing: .06em; }
+.mrd-log-badge { letter-spacing: 0; font-weight: 700; }
+
+/* Responsive. The status line is one nowrap row with overflow hidden, so on a
+   narrow screen it silently truncates from the right — and the clock and date
+   live at that end. Rather than let the clock disappear, drop the lower-value
+   items (workspace indicator, CPU/RAM, date) so agent state and time survive. */
+@media (max-width: 900px) {
+  .mrd-status { gap: 10px; }
+  .mrd-status .mrd-ws,
+  .mrd-status .mrd-metric { display: none; }
+}
+
 @media (max-width: 720px) {
   .mrd-rail { width: 190px; min-width: 190px; }
-  .mrd-status { gap: 10px; }
+  .mrd-status .mrd-subtle,
+  .mrd-status .mrd-date { display: none; }
+  .mrd-vitalstrip .cell.hero { padding: 8px 16px 10px; min-width: 100%; }
+  .mrd-vitalstrip .cell,
+  .mrd-vitalstrip .metrics { border-right: 0; }
+  .mrd-vitalstrip .flags { margin-left: 0; }
 }
