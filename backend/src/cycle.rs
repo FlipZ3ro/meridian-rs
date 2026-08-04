@@ -160,19 +160,16 @@ pub async fn run_management_cycle(
     // ── 2. Fetch real PnL + active_bin for each position ────────
     let active = positions.get_active();
 
-    // Dust sweep (self-throttled ~15min): swap leftover non-SOL tokens from
-    // closed/adopted positions back to SOL. The per-close auto-swap only sweeps
-    // what's in the wallet at close time; late fee-claim inflows and
-    // adopted-position closes can leave residual token dust this catches.
-    //
-    // We pass an EMPTY keep-set (sweep everything non-SOL): for single-side-SOL
-    // LP the open position's inventory lives in the on-chain DLMM bins, NOT the
-    // wallet token account, so ANY base token sitting in the wallet is realized
-    // leftover/fee — safe to swap even while a position in that same token is
-    // open (which happens when the bot re-enters a token it previously held).
-    {
+    // Dust sweep (self-throttled): swap leftover non-SOL tokens and unwrap
+    // residual wSOL back to SOL — but ONLY when the wallet is flat (no open
+    // positions). Swapping/unwrapping while a position is open closes the shared
+    // wSOL ATA and open positions' token ATAs (the Jupiter swap-to-SOL unwraps
+    // wSOL as a side effect too), so the next claim/close fails with
+    // AccountNotInitialized (user_token_y). Per-close unwrap + auto-swap already
+    // handle each closed position's residual, so this flat-only sweep is just the
+    // backstop for late fee-claim inflows / adopted-position leftovers.
+    if active.is_empty() {
         let keep: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let _ = &active; // inventory is in bins, not the wallet — nothing to exclude
         let swept = crate::tools::wallet::sweep_dust_to_sol(config, &keep).await;
         if swept > 0 {
             info(
