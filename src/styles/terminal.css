@@ -2,16 +2,14 @@
    Fonts load from theme.css's @import (see the note there); a second @import
    here would be dropped once the CSS is bundled.
 
-   Two faces, deliberately paired rather than one mono everywhere: DM Mono
-   carries structure — brand, panel labels, column heads, nav — and JetBrains
-   Mono carries every value the operator actually reads, because its numerals
-   are the better ones.
-
-   DM Mono ships 300/400/500 only. Google silently drops heavier weights from
-   the request, so anything asking for 700 here would render as browser-
-   synthesised fake bold, which smears badly at 9px. Display-face elements are
-   therefore capped at 500 (its real maximum) further down, and hierarchy is
-   carried by colour and size rather than weight. */
+   One face, JetBrains Mono, everywhere. Earlier revisions paired a second mono
+   for labels; both candidates fought the theme rather than supporting it —
+   a wide face broke the label rows, a soft rounded one clashed with a UI that
+   is all right angles and hard borders, and either way the labels visibly
+   belonged to a different family than the numbers beside them. A real terminal
+   renders in a single face, so hierarchy here comes from weight, size,
+   tracking and colour instead: labels at 500 and small with wide tracking,
+   values at 700, the PnL readout at 800. */
 
 .mrd {
   /* Panels sit a few steps above the page so their edges actually read. At the
@@ -54,7 +52,9 @@
   --z-overlay: 50;
 
   --font-data: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  --font-display: "DM Mono", "JetBrains Mono", ui-monospace, monospace;
+  /* Same face as the data font. Kept as its own token so the structural rules
+     below stay grouped and a future change has one place to touch. */
+  --font-display: var(--font-data);
 
   position: fixed;
   inset: 0;
@@ -623,11 +623,14 @@
 .mrd-logo-img { width: 16px; height: 16px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
 .mrd-logo-letter { width: 16px; height: 16px; border-radius: 50%; flex-shrink: 0; background: linear-gradient(135deg,#2dd4bf,#8b5cf6); display: inline-flex; align-items: center; justify-content: center; font-size: 8px; font-weight: 800; color: #06121b; line-height: 1; font-style: normal; }
 
-/* Tracking for the display face, kept in one block at the end so it wins on
-   source order and stays reviewable together rather than scattered through the
-   file. DM Mono is a normal-width mono, so small uppercase labels want real
-   tracking to stay legible — unlike the wide face this replaced, which needed
-   the opposite correction. */
+/* Structural type: the labels, heads and nav that frame the data. Kept in one
+   block at the end so it wins on source order — the per-component rules above
+   set their own weight and tracking, and anything declared alongside the
+   font-family further up was silently overridden.
+
+   Weight 500 against the values' 700/800 is what separates a label from a
+   number now that both render in the same face; the wide tracking is what
+   makes 9px uppercase readable. */
 .mrd-brand { letter-spacing: .14em; font-weight: 500; }
 .mrd-panel-label,
 .mrd-corner { letter-spacing: .18em; font-weight: 500; }
