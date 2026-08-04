@@ -518,8 +518,8 @@ impl ToolExecutor {
                         .await
                         .ok(),
                 };
-                if let Some(base_mint) = dup_base_mint {
-                    let normalized = normalize_mint(&base_mint);
+                if let Some(base_mint) = dup_base_mint.as_deref() {
+                    let normalized = normalize_mint(base_mint);
                     let has_dup = active
                         .iter()
                         .any(|p| normalize_mint(&p.base_mint) == normalized);
@@ -528,6 +528,26 @@ impl ToolExecutor {
                             "already have position with same base token {}",
                             &base_mint[..8.min(base_mint.len())]
                         );
+                    }
+                }
+
+                // Token-2022 gate. The wp claim/close one-shots derive the user
+                // token account under classic SPL, so a Token-2022 base token
+                // (token_y) can never be claimed or closed cleanly — every attempt
+                // fails with AccountNotInitialized on user_token_y and the position
+                // gets stuck retrying every poll (TikTok/CATE/HORSE today). Until
+                // the commons migration gives us Token-2022-aware tx building, don't
+                // enter these pools at all. RPC error → allowed (never block trading
+                // on a transient hiccup).
+                if config.management.skip_token_2022 {
+                    if let Some(base_mint) = dup_base_mint.as_deref() {
+                        if crate::tools::meteora_native::is_token_2022_mint(config, base_mint).await
+                        {
+                            anyhow::bail!(
+                                "Token-2022 base token {} — skipping (claim/close unsupported by the wp SDK, positions get stuck)",
+                                &base_mint[..8.min(base_mint.len())]
+                            );
+                        }
                     }
                 }
 

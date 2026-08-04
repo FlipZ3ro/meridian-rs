@@ -591,6 +591,26 @@ async fn detect_token_program(rpc: &RpcClient, mint: &Pubkey) -> Pubkey {
     }
 }
 
+/// Token-2022 program id.
+const TOKEN_2022_PROGRAM_ID: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
+
+/// True if `mint` is a Token-2022 mint (owned by the Token-2022 program). Used to
+/// screen out Token-2022 (pump.fun) pools at deploy: the wp claim/close one-shots
+/// derive the user token ATA under classic SPL, so a Token-2022 token_y can't be
+/// claimed/closed cleanly (AccountNotInitialized on user_token_y) and the position
+/// gets stuck. Returns false on RPC error — never block trading on a transient
+/// hiccup.
+pub async fn is_token_2022_mint(config: &Config, mint: &str) -> bool {
+    let Ok(pubkey) = Pubkey::from_str(mint) else {
+        return false;
+    };
+    let rpc = RpcClient::new(resolve_rpc_url(config));
+    match rpc.get_account(&pubkey).await {
+        Ok(acc) => acc.owner.to_string() == TOKEN_2022_PROGRAM_ID,
+        Err(_) => false,
+    }
+}
+
 /// Derive the associated token account address for `owner`/`mint` under
 /// `token_program`. Classic SPL and Token-2022 derive to *different* addresses,
 /// so the program must be the one that actually owns the mint.
