@@ -9,10 +9,10 @@ const barFor = (score: number | undefined, max: number) =>
   Math.max(4, Math.round(((Number(score ?? 0)) / (max || 1)) * 100));
 
 export const OverviewPane = ({ filter = '' }: { filter?: string }) => {
-  const { positions, loading: positionsLoading } = usePositions();
+  const { positions, loading: positionsLoading, note: positionsNote } = usePositions();
   const { summary, pools, note: portfolioNote, loading: portfolioLoading } = usePortfolio();
   const { candidates, note: radarNote, loading: radarLoading } = useCandidates(40);
-  const { logs, loading: logsLoading } = useDecisions();
+  const { logs, loading: logsLoading, note: logsNote } = useDecisions();
   const [tab, setTab] = useState<'open' | 'closed'>('open');
 
   const f = filter.trim().toLowerCase();
@@ -44,7 +44,7 @@ export const OverviewPane = ({ filter = '' }: { filter?: string }) => {
             </div>
             {positions.length
               ? positions.map((p) => <PositionRowView key={p.key} row={p} size="lg" />)
-              : <PaneState loading={positionsLoading} message="No active backend positions." rows={2} />}
+              : <PaneState loading={positionsLoading} message={positionsNote} rows={2} />}
           </>
         ) : (
           <>
@@ -85,7 +85,7 @@ export const OverviewPane = ({ filter = '' }: { filter?: string }) => {
           <div className="mrd-log-body">
             {logRows.length
               ? logRows.map((l, i) => <LogRowView key={`${l.time}-${i}`} log={l} />)
-              : <PaneState loading={logsLoading} message="No backend decisions yet." rows={6} widths={['26%', '22%', '38%']} />}
+              : <PaneState loading={logsLoading} message={logsNote} rows={6} widths={['26%', '22%', '38%']} />}
           </div>
         </aside>
       </div>

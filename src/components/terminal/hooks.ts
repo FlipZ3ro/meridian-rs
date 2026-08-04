@@ -14,6 +14,13 @@ import {
 } from '../../lib/meridianFormat';
 
 // ── Backend status ─────────────────────────────────────────────────────
+// The Next proxy answers 502 with {success:false, error:'Meridian backend
+// unavailable'} when the Rust process is down. That still parses as JSON, so a
+// naive reader treats it as "no data" and the panes claim the bot found
+// nothing — which is a different and much more reassuring story than the truth.
+export const isBackendDown = (payload: any) =>
+  payload?.success === false || payload?.error === 'Meridian backend unavailable';
+
 export type MeridianStatus = {
   status?: string;
   dry_run?: boolean;
@@ -30,18 +37,23 @@ export type MeridianStatus = {
 
 export const useStatus = () => {
   const [status, setStatus] = useState<MeridianStatus>();
+  const [online, setOnline] = useState<boolean | null>(null);
   useEffect(() => {
     let mounted = true;
     const load = async () => {
       const payload = await cachedJson<any>('/api/meridian/status', 8_000).catch(() => undefined);
-      if (mounted && payload?.data) setStatus(payload.data as MeridianStatus);
+      if (!mounted) return;
+      if (payload?.data) { setStatus(payload.data as MeridianStatus); setOnline(true); }
+      else setOnline(false);
     };
     load();
     const t = window.setInterval(load, 8_000);
     return () => { mounted = false; window.clearInterval(t); };
   }, []);
-  return status;
+  return { status, online };
 };
+
+const BACKEND_DOWN = 'Backend unreachable — meridian-backend is not responding.';
 
 // ── Wallet balance ─────────────────────────────────────────────────────
 export const useWallet = () => {
@@ -117,6 +129,7 @@ let cachedPositionRows: PositionRow[] = [];
 
 export const usePositions = () => {
   const [positions, setPositions] = useState<PositionRow[]>(cachedPositionRows);
+  const [note, setNote] = useState('No active backend positions.');
   // "Still fetching" and "there are genuinely no positions" must not render the
   // same — an operator reading "no positions" mid-fetch would think the bot
   // exited everything.
@@ -129,6 +142,7 @@ export const usePositions = () => {
           cachedJson<any>('/api/meridian/positions', 4_000),
           cachedJson<any>('/api/meridian/candidates?limit=40', 60_000),
         ]);
+        if (mounted) setNote(isBackendDown(payload) ? BACKEND_DOWN : 'No active backend positions.');
         const positionsPayload = Array.isArray(payload?.data?.positions)
           ? payload.data.positions as BackendPosition[]
           : [];
@@ -167,7 +181,7 @@ export const usePositions = () => {
     const t = window.setInterval(load, 5_000);
     return () => { mounted = false; window.clearInterval(t); };
   }, []);
-  return { positions, loading };
+  return { positions, loading, note };
 };
 
 // ── Portfolio (closed history) ─────────────────────────────────────────
@@ -198,7 +212,9 @@ export const usePortfolio = () => {
         if (mounted) {
           setPools(nextPools);
           setSummary(nextSummary);
-          setNote(nextPools.length ? `${nextSummary.closedCount ?? 0} closed positions` : 'No closed positions yet');
+          setNote(isBackendDown(payload)
+            ? BACKEND_DOWN
+            : nextPools.length ? `${nextSummary.closedCount ?? 0} closed positions` : 'No closed positions yet');
         }
       } catch {
         if (mounted) { setPools([]); setNote('Backend unavailable'); }
@@ -227,7 +243,9 @@ export const useCandidates = (limit = 40) => {
         const filtered = Array.isArray(payload?.data?.filtered_examples) ? payload.data.filtered_examples : [];
         if (mounted) {
           setCandidates(next);
-          setNote(next.length ? `${next.length} candidates passed` : (filtered[0]?.reason ?? 'No candidates passed'));
+          setNote(isBackendDown(payload)
+            ? BACKEND_DOWN
+            : next.length ? `${next.length} candidates passed` : (filtered[0]?.reason ?? 'No candidates passed'));
         }
       } catch {
         if (mounted) { setCandidates([]); setNote('Backend unavailable'); }
@@ -246,6 +264,7 @@ export const useCandidates = (limit = 40) => {
 export const useDecisions = () => {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [note, setNote] = useState('No backend decisions yet.');
   useEffect(() => {
     let mounted = true;
     const load = async () => {
@@ -261,7 +280,10 @@ export const useDecisions = () => {
           { time: 'now', badge: 'INFO', kind: 'info', pair: '-', message: `Active positions: ${status.active_positions ?? 0}` },
           { time: 'now', badge: 'INFO', kind: 'info', pair: '-', message: `Screen ${status.schedule?.screeningIntervalMin ?? '-'}m · Manage ${status.schedule?.managementIntervalMin ?? '-'}m` },
         ] : [];
-        if (mounted) setLogs(decisions.length ? decisions.slice(0, 40).map(mapDecision) : fallback);
+        if (mounted) {
+          setLogs(decisions.length ? decisions.slice(0, 40).map(mapDecision) : fallback);
+          setNote(isBackendDown(payload) ? BACKEND_DOWN : 'No backend decisions yet.');
+        }
       } catch {
         if (mounted) setLogs([]);
       } finally {
@@ -272,7 +294,7 @@ export const useDecisions = () => {
     const t = window.setInterval(load, 15_000);
     return () => { mounted = false; window.clearInterval(t); };
   }, []);
-  return { logs, loading };
+  return { logs, loading, note };
 };
 
 // ── Agent process control ──────────────────────────────────────────────

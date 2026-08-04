@@ -9,7 +9,7 @@ type Notify = (kind: string, text: string) => void;
 export const SettingsPane = ({ onNotify }: { onNotify?: Notify }) => {
   const agent = useAgentControl();
   const flip = useQuickFlip();
-  const status = useStatus();
+  const { status, online: backendOnline } = useStatus();
   const [copied, setCopied] = useState(false);
 
   const online = agent.online;
@@ -95,9 +95,14 @@ export const SettingsPane = ({ onNotify }: { onNotify?: Notify }) => {
       <section className="mrd-set-card">
         <span className="mrd-panel-label" style={{ background: 'var(--panel)' }}>BACKEND STATUS</span>
         <div className="mrd-set-state">
-          <span className="slabel" style={{ color: 'var(--green)' }}>{status?.status ?? 'loading'}</span>
+          <span className="slabel" style={{ color: backendOnline === false ? 'var(--red)' : 'var(--green)' }}>
+            {backendOnline === false ? 'unreachable' : backendOnline === null ? 'connecting' : status?.status ?? 'running'}
+          </span>
           <span className="grow" />
-          <span className="live">{status?.dry_run ? 'DRY RUN' : 'LIVE'}</span>
+          {/* Mode is only knowable while the backend answers. */}
+          <span className="live" style={backendOnline === false ? { color: 'var(--red)' } : undefined}>
+            {backendOnline === false ? 'NO SIGNAL' : backendOnline === null ? '…' : status?.dry_run ? 'DRY RUN' : 'LIVE'}
+          </span>
         </div>
         {wallet ? (
           <button type="button" className="mrd-set-wallet" aria-label="Copy wallet address" onClick={copyWallet} title={`${wallet}\nClick to copy`}>

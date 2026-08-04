@@ -81,7 +81,7 @@ export default function MeridianTerminal() {
   const [filter, setFilter] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const status = useStatus();
+  const { status, online: backendOnline } = useStatus();
   const agent = useAgentControl();
   const flip = useQuickFlip();
   const sol = useWallet();
@@ -253,7 +253,11 @@ export default function MeridianTerminal() {
     { label: 'OPEN', value: String(status?.active_positions ?? positions.length), color: 'var(--bright)' },
     { label: 'WIN RATE', value: `${Number(summary.winRate ?? 0).toFixed(0)}%`, color: 'var(--green)' },
   ];
-  const stripMetrics = vitals.filter((v) => v.label !== 'PNL');
+  const stripMetrics = [
+    ...vitals.filter((v) => v.label !== 'PNL'),
+    { label: 'FEES', value: plainUsd(summary.feesClaimedUsd), color: 'var(--green)' },
+    { label: 'DEPOSIT', value: plainUsd(summary.allTimeDepositUsd), color: 'var(--soft)' },
+  ];
 
   const navButtons = (small = false) => (
     <>
@@ -387,7 +391,12 @@ export default function MeridianTerminal() {
                   ))}
                 </div>
                 <div className="flags">
-                  <span className="flag live">{status?.dry_run ? 'DRY RUN' : 'LIVE'}</span>
+                  {/* Never claim LIVE on an unknown backend — with the process
+                      down, status is undefined and the old ternary fell through
+                      to "LIVE", asserting live trading it could not see. */}
+                  <span className={`flag ${backendOnline === false ? 'down' : 'live'}`}>
+                    {backendOnline === false ? 'BACKEND DOWN' : backendOnline === null ? 'CONNECTING' : status?.dry_run ? 'DRY RUN' : 'LIVE'}
+                  </span>
                   <span className="flag open">{positions.length} OPEN</span>
                 </div>
               </div>
