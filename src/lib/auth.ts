@@ -6,6 +6,28 @@
 export const COOKIE_NAME = 'meridian_session';
 const DEFAULT_TTL_SEC = 60 * 60 * 12; // 12h session
 
+// Auth bypass — skips the lock screen and the API gate. Two independent
+// triggers, both deliberately narrow:
+//
+//   1. Local development: a dev build AND the request arrived on localhost.
+//      Both halves matter. Running `next dev` on the VPS and reaching it
+//      through the Cloudflare tunnel does NOT bypass, because the Host header
+//      is then the public domain rather than localhost.
+//   2. MERIDIAN_NO_AUTH=1: explicit, unconditional, works in production too.
+//
+// Trigger 2 opens /api/agent/* (start/stop the agent, arm the LIVE quick-flip
+// scalper) and /api/meridian/control (claim fees, close positions) to anyone
+// who can reach the host. Only set it when the dashboard is not exposed to the
+// internet.
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+
+export const authBypassed = (host?: string | null): boolean => {
+  if (process.env.MERIDIAN_NO_AUTH === '1') return true;
+  if (process.env.NODE_ENV === 'production') return false;
+  const hostname = (host ?? '').trim().toLowerCase().replace(/:\d+$/, '');
+  return LOCAL_HOSTS.has(hostname);
+};
+
 const enc = new TextEncoder();
 
 const b64url = (bytes: Uint8Array): string => {

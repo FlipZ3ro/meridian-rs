@@ -34,16 +34,16 @@ export const StatusLine = ({ agentOnline, agentLabel, status }: Props) => {
   const weatherText = vw >= 1340 ? `${weather.temperature}°C ${weather.location}` : `${weather.temperature}°C`;
 
   return (
-    <div className="mrd-status">
+    <header className="mrd-status">
       <div className="st-group">
-        <span className="mrd-logo">M</span>
+        <span className="mrd-logo" aria-hidden="true">M</span>
         <span className="mrd-brand">MERIDIAN</span>
         <span className="mrd-sep">/</span>
         <span className="mrd-subtle">DLMM AGENT</span>
       </div>
       <div className="st-group">
-        <span className="mrd-dot" style={{ background: agentColor }} />
-        <span style={{ color: agentColor, fontWeight: 700, letterSpacing: '.14em' }}>{agentLabel}</span>
+        <span className="mrd-dot" style={{ background: agentColor }} aria-hidden="true" />
+        <span style={{ color: agentColor, fontWeight: 700, letterSpacing: '.14em' }} aria-label={`Agent ${agentLabel}`}>{agentLabel}</span>
       </div>
       <div className="mrd-ws">
         <span style={{ letterSpacing: '.14em' }}>ws</span>
@@ -51,7 +51,7 @@ export const StatusLine = ({ agentOnline, agentLabel, status }: Props) => {
         <span className="off">2</span>
       </div>
       <div className="mrd-spacer" />
-      <span style={{ color: 'var(--purple)', fontSize: 12 }}>{SPIN[tick % SPIN.length]}</span>
+      <span style={{ color: 'var(--purple)', fontSize: 12 }} aria-hidden="true">{SPIN[tick % SPIN.length]}</span>
       <div className="mrd-metric">
         <span className="k">CPU</span>
         <span className="v">{system.cpu}%</span>
@@ -68,9 +68,9 @@ export const StatusLine = ({ agentOnline, agentLabel, status }: Props) => {
           <span style={{ flex: '0 0 auto', color: 'var(--soft)' }}>{weatherText}</span>
         </div>
       ) : null}
-      <span className="mrd-sep">│</span>
+      <span className="mrd-sep" aria-hidden="true">│</span>
       <span className="mrd-clock">{clock}</span>
       <span className="mrd-date">{date}</span>
-    </div>
+    </header>
   );
 };

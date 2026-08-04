@@ -1,17 +1,17 @@
 'use client';
 
 import { usePortfolio } from '../hooks';
-import { PortfolioRowView } from './rows';
+import { PortfolioRowView, PaneState } from './rows';
 import { plainUsd, pctText } from '../../../lib/meridianFormat';
 
 export const PortfolioPane = ({ filter = '' }: { filter?: string }) => {
-  const { summary, pools, note } = usePortfolio();
+  const { summary, pools, note, loading } = usePortfolio();
   const f = filter.trim().toLowerCase();
   const rows = pools.filter((p) => !f || (p.poolName ?? '').toLowerCase().includes(f));
   const pnlPositive = Number(summary.totalPnlUsd ?? 0) >= 0;
 
   return (
-    <div className="mrd-panel">
+    <section className="mrd-panel" aria-label="Historical DLMM positions">
       <span className="mrd-panel-label">HISTORICAL — DLMM POSITIONS</span>
       <span className="mrd-panel-right">{summary.closedCount ?? 0} CLOSED</span>
 
@@ -29,8 +29,8 @@ export const PortfolioPane = ({ filter = '' }: { filter?: string }) => {
       <div>
         {rows.length
           ? rows.map((p) => <PortfolioRowView key={p.pool ?? p.poolName} pool={p} />)
-          : <div className="mrd-empty">{note}</div>}
+          : <PaneState loading={loading} message={f ? `No pools match "${filter}".` : note} rows={5} widths={['30%', '14%', '16%', '16%', '14%']} />}
       </div>
-    </div>
+    </section>
   );
 };

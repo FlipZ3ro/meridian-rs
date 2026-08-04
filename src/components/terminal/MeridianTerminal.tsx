@@ -85,7 +85,7 @@ export default function MeridianTerminal() {
   const agent = useAgentControl();
   const flip = useQuickFlip();
   const sol = useWallet();
-  const positions = usePositions();
+  const { positions } = usePositions();
   const { summary } = usePortfolio();
 
   const push = useCallback((kind: string, text: string) => {
@@ -286,9 +286,15 @@ export default function MeridianTerminal() {
       <StatusLine agentOnline={agentOnline} agentLabel={agentLabel} status={status} />
 
       {nav === 'tabs' ? (
-        <div className="mrd-tabs">
+        <nav className="mrd-tabs" aria-label="Panes">
           {SCREENS.map(([id, label], i) => (
-            <button type="button" key={id} className={`mrd-tab ${screen === id ? 'active' : ''}`} onClick={() => setScreen(id)}>
+            <button
+              type="button"
+              key={id}
+              className={`mrd-tab ${screen === id ? 'active' : ''}`}
+              aria-current={screen === id ? 'page' : undefined}
+              onClick={() => setScreen(id)}
+            >
               <span className="num">{i + 1}</span>
               <span className="label">{label}</span>
               {screen === id ? <span className="underline" /> : null}
@@ -296,12 +302,12 @@ export default function MeridianTerminal() {
           ))}
           <div className="mrd-tabs-fill" />
           <div className="mrd-navmode">{navButtons()}</div>
-        </div>
+        </nav>
       ) : null}
 
       <div className="mrd-body">
         {nav === 'rail' ? (
-          <div className="mrd-rail">
+          <aside className="mrd-rail" aria-label="Session summary and panes">
             <div className="mrd-rail-box mrd-rail-user">
               <span className="mrd-corner">USER</span>
               <div className="name">OxRapzz</div>
@@ -321,12 +327,13 @@ export default function MeridianTerminal() {
               ))}
             </div>
 
-            <div className="mrd-rail-nav">
+            <nav className="mrd-rail-nav" aria-label="Panes">
               {SCREENS.map(([id, label], i) => (
                 <button
                   type="button"
                   key={id}
                   className={`mrd-rail-btn ${screen === id ? 'active' : ''}`}
+                  aria-current={screen === id ? 'page' : undefined}
                   style={{ borderLeftColor: screen === id ? 'var(--bright)' : 'var(--dim)' }}
                   onClick={() => setScreen(id)}
                 >
@@ -334,14 +341,14 @@ export default function MeridianTerminal() {
                   <span style={{ color: screen === id ? 'var(--bright)' : 'var(--dim)' }}>{label}</span>
                 </button>
               ))}
-            </div>
+            </nav>
 
             <div className="mrd-rail-grow" />
             <div className="mrd-rail-foot">{navButtons(true)}</div>
-          </div>
+          </aside>
         ) : null}
 
-        <div className="mrd-main">
+        <main className="mrd-main">
           {nav === 'zen' ? (
             <div className="mrd-zen">
               <span className="caret">❯</span>
@@ -391,7 +398,7 @@ export default function MeridianTerminal() {
           </div>
 
           {consoleOpen && lines.length ? (
-            <div className="mrd-console">
+            <div className="mrd-console" role="log" aria-label="Command output" aria-live="polite">
               {lines.map((line, i) => (
                 <div className="mrd-console-line" key={i} style={{ color: LINE_COLOR[line.kind] ?? 'var(--soft)' }}>{line.text}</div>
               ))}
@@ -399,20 +406,21 @@ export default function MeridianTerminal() {
           ) : null}
 
           <div className="mrd-cmdbar">
-            <span className="host">meridian</span>
-            <span className="tilde">~</span>
-            <span className="caret">❯</span>
+            <span className="host" aria-hidden="true">meridian</span>
+            <span className="tilde" aria-hidden="true">~</span>
+            <span className="caret" aria-hidden="true">❯</span>
             <input
               ref={inputRef}
               type="text"
               value={cmd}
               spellCheck={false}
               autoComplete="off"
+              aria-label="Terminal command"
               placeholder="type a command — help, positions, radar, arm, nav rail…"
               onChange={(e) => setCmd(e.target.value)}
               onKeyDown={onCmdKey}
             />
-            {consoleOpen ? <button type="button" className="esc" onClick={() => setConsoleOpen(false)}>ESC</button> : null}
+            {consoleOpen ? <button type="button" className="esc" aria-label="Close command output" onClick={() => setConsoleOpen(false)}>ESC</button> : null}
           </div>
 
           <div className="mrd-hints">
@@ -425,7 +433,7 @@ export default function MeridianTerminal() {
             <div className="grow" />
             <span className="mrd-session">session meridian · window {screenLabel.toLowerCase()} · pane 0</span>
           </div>
-        </div>
+        </main>
       </div>
     </div>
   );

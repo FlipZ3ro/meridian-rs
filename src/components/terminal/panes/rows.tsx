@@ -13,6 +13,34 @@ import {
   type PoolHistory,
 } from '../../../lib/meridianFormat';
 
+// Renders the not-yet-loaded state as skeleton rows and the genuinely-empty
+// state as a message. Callers pass `loading` so the two never get confused.
+export const PaneState = ({
+  loading,
+  message,
+  rows = 3,
+  widths = ['34%', '22%', '26%', '12%'],
+}: {
+  loading: boolean;
+  message: string;
+  rows?: number;
+  widths?: string[];
+}) => {
+  if (!loading) return <div className="mrd-empty">{message}</div>;
+  return (
+    <div className="mrd-skeleton" aria-busy="true" aria-live="polite">
+      <span className="mrd-skeleton-note">LOADING…</span>
+      {Array.from({ length: rows }, (_, r) => (
+        <div className="mrd-skeleton-row" key={r}>
+          {widths.map((w, c) => (
+            <span className="mrd-skeleton-bar" style={{ width: w }} key={c} />
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+};
+
 // ── Position row (open positions) ──────────────────────────────────────
 export const PositionRowView = ({
   row,

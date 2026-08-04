@@ -35,14 +35,20 @@
   --blue: #6ea8ff;
   --orange: #f97316;
 
+  /* Layer scale — every stacking context in the terminal picks from these. */
+  --z-shell: 100;
+  --z-overlay: 50;
+
   position: fixed;
   inset: 0;
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  /* dvh, not vh: mobile browsers shrink the viewport when the URL bar hides,
+     and vh would leave the command bar stranded below the fold. */
+  height: 100dvh;
   max-width: 100vw;
   overflow: hidden;
-  z-index: 100;
+  z-index: var(--z-shell);
   background: var(--bg);
   color: var(--text);
   font-family: "Geist Mono", "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -68,6 +74,35 @@
 
 @keyframes mdblink { 0%, 49% { opacity: 1 } 50%, 100% { opacity: 0 } }
 @keyframes mdpulse { 0%, 100% { opacity: 1 } 50% { opacity: .3 } }
+@keyframes mdskeleton { 0%, 100% { opacity: .25 } 50% { opacity: .5 } }
+
+/* Interactive feedback. Colour-only transitions (no layout properties) so hover
+   stays cheap, plus a 1px press displacement for physical click feedback. */
+.mrd button,
+.mrd input {
+  transition: background-color 160ms ease, color 160ms ease, border-color 160ms ease;
+}
+.mrd button:active:not(:disabled) { transform: translateY(1px); }
+
+/* This UI is driven by the keyboard, so the focus ring is load-bearing, not
+   decoration. Offset inward — the panels sit flush against each other and an
+   outward ring would be clipped by the neighbouring border. */
+.mrd :focus-visible {
+  outline: 1px solid var(--purple);
+  outline-offset: -2px;
+}
+.mrd .mrd-cmdbar input:focus-visible { outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .mrd *,
+  .mrd *::before,
+  .mrd *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .mrd button:active:not(:disabled) { transform: none; }
+}
 
 /* ── Status line ─────────────────────────────────────────────────────── */
 .mrd-status {
@@ -324,6 +359,23 @@
 .down { color: var(--red); }
 .mrd-empty { padding: 26px 16px; text-align: center; color: var(--faint); font-size: 11px; }
 
+/* Loading placeholder. Shaped like the rows it replaces so the panel doesn't
+   reflow when data lands, and kept distinct from the empty state — "no
+   positions" and "not loaded yet" mean very different things on a trading desk. */
+.mrd-skeleton { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.mrd-skeleton-row { display: flex; align-items: center; gap: 10px; }
+.mrd-skeleton-bar {
+  height: 9px;
+  background: var(--line-2);
+  animation: mdskeleton 1.4s ease-in-out infinite;
+}
+.mrd-skeleton-note {
+  padding: 0 14px 12px;
+  color: var(--faint);
+  font-size: 10px;
+  letter-spacing: .14em;
+}
+
 /* ── Candidate radar ─────────────────────────────────────────────────── */
 .mrd-radar { flex: 1 1 auto; min-height: 190px; display: flex; flex-direction: column; }
 .mrd-cand-head { display: grid; padding: 14px 14px 8px; border-bottom: 1px solid var(--line-2); color: var(--dim); font-size: 9px; font-weight: 700; letter-spacing: .18em; }
@@ -446,7 +498,7 @@
 .mrd-session { color: var(--faint); }
 
 /* Scanlines overlay */
-.mrd-scanlines { position: absolute; inset: 0; pointer-events: none; z-index: 50; background: repeating-linear-gradient(180deg, rgba(255,255,255,0.022) 0px, rgba(255,255,255,0.022) 1px, transparent 1px, transparent 3px); }
+.mrd-scanlines { position: absolute; inset: 0; pointer-events: none; z-index: var(--z-overlay); background: repeating-linear-gradient(180deg, rgba(255,255,255,0.022) 0px, rgba(255,255,255,0.022) 1px, transparent 1px, transparent 3px); }
 
 /* Token logo */
 .mrd-logo-img { width: 16px; height: 16px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }

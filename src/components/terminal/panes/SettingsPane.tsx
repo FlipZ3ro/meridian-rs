@@ -48,7 +48,7 @@ export const SettingsPane = ({ onNotify }: { onNotify?: Notify }) => {
   return (
     <div className="mrd-settings">
       {/* Agent control */}
-      <div className="mrd-set-card">
+      <section className="mrd-set-card">
         <span className="mrd-panel-label" style={{ background: 'var(--panel)' }}>AGENT CONTROL</span>
         <div className="mrd-set-state">
           <span className="sdot" style={{ background: agentColor }} />
@@ -57,15 +57,15 @@ export const SettingsPane = ({ onNotify }: { onNotify?: Notify }) => {
           <span className="sub">meridian-backend</span>
         </div>
         <div className="mrd-set-actions">
-          <button type="button" className={`mrd-set-btn ${online ? '' : 'go'}`} disabled={agent.busy || online} onClick={() => runAgent('start')}>▷ START</button>
-          <button type="button" className={`mrd-set-btn ${online ? 'stop' : ''}`} disabled={agent.busy || !online} onClick={() => runAgent('stop')}>□ STOP</button>
-          <button type="button" className="mrd-set-btn" disabled={agent.busy} onClick={() => runAgent('restart')}>↻ RESTART</button>
+          <button type="button" aria-label="Start trading agent" className={`mrd-set-btn ${online ? '' : 'go'}`} disabled={agent.busy || online} onClick={() => runAgent('start')}>▷ START</button>
+          <button type="button" aria-label="Stop trading agent" className={`mrd-set-btn ${online ? 'stop' : ''}`} disabled={agent.busy || !online} onClick={() => runAgent('stop')}>□ STOP</button>
+          <button type="button" aria-label="Restart trading agent" className="mrd-set-btn" disabled={agent.busy} onClick={() => runAgent('restart')}>↻ RESTART</button>
         </div>
         <p className="mrd-set-note">Frontend &amp; dashboard stay online — only the trading agent starts/stops.</p>
-      </div>
+      </section>
 
       {/* Quick-flip scalper */}
-      <div className="mrd-set-card">
+      <section className="mrd-set-card">
         <span className="mrd-panel-label" style={{ background: 'var(--panel)' }}>QUICK-FLIP SCALPER</span>
         <div className="mrd-set-state">
           <span className="sdot" style={{ background: armed ? 'var(--green)' : 'var(--red)' }} />
@@ -73,7 +73,13 @@ export const SettingsPane = ({ onNotify }: { onNotify?: Notify }) => {
           <span className="grow" />
           <span className="live">{flip.state?.mode ? (flip.live ? 'LIVE' : 'DRY RUN') : 'VOLUME-SPIKE'}</span>
         </div>
-        <button type="button" className={`mrd-set-btn wide ${armed ? 'stop' : 'go'}`} disabled={flip.busy || flip.state === undefined} onClick={toggleFlip}>
+        <button
+          type="button"
+          aria-label={armed ? 'Disarm quick-flip scalper' : 'Arm quick-flip scalper'}
+          className={`mrd-set-btn wide ${armed ? 'stop' : 'go'}`}
+          disabled={flip.busy || flip.state === undefined}
+          onClick={toggleFlip}
+        >
           {armed ? '□ DISARM' : '▷ ARM'}
         </button>
         <div className="mrd-set-grid">
@@ -83,10 +89,10 @@ export const SettingsPane = ({ onNotify }: { onNotify?: Notify }) => {
           <div className="mrd-set-kv"><div className="k">SIZE / POS</div><div className="v">{p?.deploy_amount_sol ? `◎${p.deploy_amount_sol}` : '-'}</div></div>
         </div>
         <p className="mrd-set-note">Deterministic, no LLM. Enters on volume spikes, exits on fade / max-hold. Single-side SOL.</p>
-      </div>
+      </section>
 
       {/* Backend status */}
-      <div className="mrd-set-card">
+      <section className="mrd-set-card">
         <span className="mrd-panel-label" style={{ background: 'var(--panel)' }}>BACKEND STATUS</span>
         <div className="mrd-set-state">
           <span className="slabel" style={{ color: 'var(--green)' }}>{status?.status ?? 'loading'}</span>
@@ -94,8 +100,8 @@ export const SettingsPane = ({ onNotify }: { onNotify?: Notify }) => {
           <span className="live">{status?.dry_run ? 'DRY RUN' : 'LIVE'}</span>
         </div>
         {wallet ? (
-          <button type="button" className="mrd-set-wallet" onClick={copyWallet} title={`${wallet}\nClick to copy`}>
-            <span className="icon">◧</span>
+          <button type="button" className="mrd-set-wallet" aria-label="Copy wallet address" onClick={copyWallet} title={`${wallet}\nClick to copy`}>
+            <span className="icon" aria-hidden="true">◧</span>
             <span>{shortAddr(wallet)}</span>
             <span className={`copy ${copied ? 'done' : ''}`}>{copied ? 'COPIED' : 'COPY'}</span>
           </button>
@@ -108,7 +114,7 @@ export const SettingsPane = ({ onNotify }: { onNotify?: Notify }) => {
           <div className="mrd-set-kv"><div className="k">STATE</div><div className="v big">{status?.state_path ? 'connected' : 'not set'}</div></div>
           <div className="mrd-set-kv"><div className="k">DATA DIR</div><div className="v big">{status?.data_dir ? 'available' : 'unknown'}</div></div>
         </div>
-      </div>
+      </section>
     </div>
   );
 };

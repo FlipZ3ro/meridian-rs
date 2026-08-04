@@ -2,17 +2,17 @@
 
 import { useState } from 'react';
 import { usePositions, usePortfolio, useCandidates, useDecisions } from '../hooks';
-import { PositionRowView, CandidateRowView, LogRowView, PortfolioRowView } from './rows';
+import { PositionRowView, CandidateRowView, LogRowView, PortfolioRowView, PaneState } from './rows';
 import { plainUsd } from '../../../lib/meridianFormat';
 
 const barFor = (score: number | undefined, max: number) =>
   Math.max(4, Math.round(((Number(score ?? 0)) / (max || 1)) * 100));
 
 export const OverviewPane = ({ filter = '' }: { filter?: string }) => {
-  const positions = usePositions();
-  const { summary, pools } = usePortfolio();
-  const { candidates } = useCandidates(40);
-  const logs = useDecisions();
+  const { positions, loading: positionsLoading } = usePositions();
+  const { summary, pools, note: portfolioNote, loading: portfolioLoading } = usePortfolio();
+  const { candidates, note: radarNote, loading: radarLoading } = useCandidates(40);
+  const { logs, loading: logsLoading } = useDecisions();
   const [tab, setTab] = useState<'open' | 'closed'>('open');
 
   const f = filter.trim().toLowerCase();
@@ -25,13 +25,13 @@ export const OverviewPane = ({ filter = '' }: { filter?: string }) => {
     <div className="mrd-overview">
       <div className="mrd-ov-left">
         {/* Positions panel with open/closed tabs */}
-        <div className="mrd-panel">
+        <section className="mrd-panel" aria-label="Positions">
           <span className="mrd-panel-label">POSITIONS</span>
-          <div className="mrd-postabs">
-            <button type="button" className={`mrd-postab ${tab === 'open' ? 'active' : ''}`} onClick={() => setTab('open')}>
+          <div className="mrd-postabs" role="tablist" aria-label="Position state">
+            <button type="button" role="tab" aria-selected={tab === 'open'} className={`mrd-postab ${tab === 'open' ? 'active' : ''}`} onClick={() => setTab('open')}>
               OPEN<span className="count">{positions.length}</span>
             </button>
-            <button type="button" className={`mrd-postab ${tab === 'closed' ? 'active' : ''}`} onClick={() => setTab('closed')}>
+            <button type="button" role="tab" aria-selected={tab === 'closed'} className={`mrd-postab ${tab === 'closed' ? 'active' : ''}`} onClick={() => setTab('closed')}>
               CLOSED<span className="count">{summary.closedCount ?? 0}</span>
             </button>
             <div className="mrd-postabs-fill" />
@@ -45,7 +45,7 @@ export const OverviewPane = ({ filter = '' }: { filter?: string }) => {
               </div>
               {positions.length
                 ? positions.map((p) => <PositionRowView key={p.key} row={p} size="sm" />)
-                : <div className="mrd-empty">No active backend positions.</div>}
+                : <PaneState loading={positionsLoading} message="No active backend positions." rows={2} />}
             </>
           ) : (
             <>
@@ -60,13 +60,13 @@ export const OverviewPane = ({ filter = '' }: { filter?: string }) => {
               </div>
               {closedRows.length
                 ? closedRows.map((p) => <PortfolioRowView key={p.pool ?? p.poolName} pool={p} />)
-                : <div className="mrd-empty">No closed positions yet.</div>}
+                : <PaneState loading={portfolioLoading} message={portfolioNote} rows={4} widths={['30%', '14%', '16%', '16%', '14%']} />}
             </>
           )}
-        </div>
+        </section>
 
         {/* Candidate radar (compact) */}
-        <div className="mrd-panel mrd-radar">
+        <section className="mrd-panel mrd-radar" aria-label="Candidate radar">
           <span className="mrd-panel-label">CANDIDATE RADAR</span>
           <span className="mrd-panel-right">{radar.length} PASSED</span>
           <div className="mrd-cand-head mrd-cand-grid">
@@ -75,21 +75,21 @@ export const OverviewPane = ({ filter = '' }: { filter?: string }) => {
           <div className="mrd-cand-body">
             {radar.length
               ? radar.map((c) => <CandidateRowView key={c.pool_address ?? c.name} candidate={c} barPct={barFor(c.score, maxScore)} size="sm" />)
-              : <div className="mrd-empty">No candidates passed.</div>}
+              : <PaneState loading={radarLoading} message={radarNote} rows={3} />}
           </div>
-        </div>
+        </section>
       </div>
 
       {/* Activity log (tail -f) */}
-      <div className="mrd-ov-right mrd-log-panel">
+      <aside className="mrd-ov-right mrd-log-panel" aria-label="Activity log">
         <span className="mrd-panel-label">ACTIVITY LOG</span>
         <span className="mrd-panel-right">TAIL -F</span>
         <div className="mrd-log-body">
           {logRows.length
             ? logRows.map((l, i) => <LogRowView key={`${l.time}-${i}`} log={l} />)
-            : <div className="mrd-empty">No backend decisions yet.</div>}
+            : <PaneState loading={logsLoading} message="No backend decisions yet." rows={6} widths={['26%', '22%', '38%']} />}
         </div>
-      </div>
+      </aside>
     </div>
   );
 };

@@ -1,15 +1,15 @@
 'use client';
 
 import { useDecisions } from '../hooks';
-import { LogRowFullView } from './rows';
+import { LogRowFullView, PaneState } from './rows';
 
 export const LogPane = ({ filter = '' }: { filter?: string }) => {
-  const logs = useDecisions();
+  const { logs, loading } = useDecisions();
   const f = filter.trim().toLowerCase();
   const rows = logs.filter((l) => !f || `${l.badge} ${l.pair} ${l.message}`.toLowerCase().includes(f));
 
   return (
-    <div className="mrd-panel">
+    <section className="mrd-panel" aria-label="Activity log">
       <span className="mrd-panel-label">ACTIVITY LOG</span>
       <span className="mrd-panel-right">{rows.length} EVENTS</span>
       <div className="mrd-log-full-head">
@@ -18,8 +18,8 @@ export const LogPane = ({ filter = '' }: { filter?: string }) => {
       <div>
         {rows.length
           ? rows.map((l, i) => <LogRowFullView key={`${l.time}-${i}`} log={l} />)
-          : <div className="mrd-empty">No backend decisions yet.</div>}
+          : <PaneState loading={loading} message={f ? `No events match "${filter}".` : 'No backend decisions yet.'} rows={6} widths={['12%', '10%', '16%', '44%']} />}
       </div>
-    </div>
+    </section>
   );
 };

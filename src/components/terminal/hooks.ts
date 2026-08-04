@@ -117,6 +117,10 @@ let cachedPositionRows: PositionRow[] = [];
 
 export const usePositions = () => {
   const [positions, setPositions] = useState<PositionRow[]>(cachedPositionRows);
+  // "Still fetching" and "there are genuinely no positions" must not render the
+  // same — an operator reading "no positions" mid-fetch would think the bot
+  // exited everything.
+  const [loading, setLoading] = useState(cachedPositionRows.length === 0);
   useEffect(() => {
     let mounted = true;
     const load = async () => {
@@ -155,13 +159,15 @@ export const usePositions = () => {
         }
       } catch {
         if (mounted) setPositions(cachedPositionRows);
+      } finally {
+        if (mounted) setLoading(false);
       }
     };
     load();
     const t = window.setInterval(load, 5_000);
     return () => { mounted = false; window.clearInterval(t); };
   }, []);
-  return positions;
+  return { positions, loading };
 };
 
 // ── Portfolio (closed history) ─────────────────────────────────────────
@@ -180,7 +186,8 @@ export type { PoolHistory } from '../../lib/meridianFormat';
 export const usePortfolio = () => {
   const [summary, setSummary] = useState<PortfolioSummary>({});
   const [pools, setPools] = useState<PoolHistory[]>([]);
-  const [note, setNote] = useState('Loading history…');
+  const [note, setNote] = useState('No closed positions yet');
+  const [loading, setLoading] = useState(true);
   useEffect(() => {
     let mounted = true;
     const load = async () => {
@@ -195,19 +202,22 @@ export const usePortfolio = () => {
         }
       } catch {
         if (mounted) { setPools([]); setNote('Backend unavailable'); }
+      } finally {
+        if (mounted) setLoading(false);
       }
     };
     load();
     const t = window.setInterval(load, 60_000);
     return () => { mounted = false; window.clearInterval(t); };
   }, []);
-  return { summary, pools, note };
+  return { summary, pools, note, loading };
 };
 
 // ── Candidate radar ────────────────────────────────────────────────────
 export const useCandidates = (limit = 40) => {
   const [candidates, setCandidates] = useState<Candidate[]>([]);
-  const [note, setNote] = useState('Loading candidates…');
+  const [note, setNote] = useState('No candidates passed');
+  const [loading, setLoading] = useState(true);
   useEffect(() => {
     let mounted = true;
     const load = async () => {
@@ -221,18 +231,21 @@ export const useCandidates = (limit = 40) => {
         }
       } catch {
         if (mounted) { setCandidates([]); setNote('Backend unavailable'); }
+      } finally {
+        if (mounted) setLoading(false);
       }
     };
     load();
     const t = window.setInterval(load, 60_000);
     return () => { mounted = false; window.clearInterval(t); };
   }, [limit]);
-  return { candidates, note };
+  return { candidates, note, loading };
 };
 
 // ── Decisions (activity log) ───────────────────────────────────────────
 export const useDecisions = () => {
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [loading, setLoading] = useState(true);
   useEffect(() => {
     let mounted = true;
     const load = async () => {
@@ -251,13 +264,15 @@ export const useDecisions = () => {
         if (mounted) setLogs(decisions.length ? decisions.slice(0, 40).map(mapDecision) : fallback);
       } catch {
         if (mounted) setLogs([]);
+      } finally {
+        if (mounted) setLoading(false);
       }
     };
     load();
     const t = window.setInterval(load, 15_000);
     return () => { mounted = false; window.clearInterval(t); };
   }, []);
-  return logs;
+  return { logs, loading };
 };
 
 // ── Agent process control ──────────────────────────────────────────────
