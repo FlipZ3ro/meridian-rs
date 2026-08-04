@@ -768,6 +768,7 @@ impl Default for Config {
                 exit_rsi_threshold: default_exit_rsi_threshold(),
                 exit_bb_upper_pctb: default_exit_bb_upper_pctb(),
                 exit_min_profit_pct: 0.0,
+                skip_token_2022: default_skip_token_2022(),
                 sol_mode: false,
             },
             risk: RiskConfig {
