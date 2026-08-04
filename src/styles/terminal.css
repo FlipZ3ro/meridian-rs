@@ -2,12 +2,16 @@
    Fonts load from theme.css's @import (see the note there); a second @import
    here would be dropped once the CSS is bundled.
 
-   Two faces, deliberately paired rather than one mono everywhere:
-   Martian Mono is wide and mechanical, so it carries structure — brand, panel
-   labels, column heads, nav. JetBrains Mono has the better numerals, so it
-   carries every value the operator actually reads. Martian is already wide by
-   design, so tracking on it stays low; the old .2em was tuned for a narrow
-   face and would blow the label rows apart here. */
+   Two faces, deliberately paired rather than one mono everywhere: DM Mono
+   carries structure — brand, panel labels, column heads, nav — and JetBrains
+   Mono carries every value the operator actually reads, because its numerals
+   are the better ones.
+
+   DM Mono ships 300/400/500 only. Google silently drops heavier weights from
+   the request, so anything asking for 700 here would render as browser-
+   synthesised fake bold, which smears badly at 9px. Display-face elements are
+   therefore capped at 500 (its real maximum) further down, and hierarchy is
+   carried by colour and size rather than weight. */
 
 .mrd {
   --bg: #04070c;
@@ -47,7 +51,7 @@
   --z-overlay: 50;
 
   --font-data: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  --font-display: "Martian Mono", "JetBrains Mono", ui-monospace, monospace;
+  --font-display: "DM Mono", "JetBrains Mono", ui-monospace, monospace;
 
   position: fixed;
   inset: 0;
@@ -71,6 +75,7 @@
    Mono is wide enough on its own that these all run tighter than the values. */
 .mrd-brand,
 .mrd-panel-label,
+.mrd-corner,
 .mrd-panel-right,
 .mrd-tab .label,
 .mrd-rail-btn,
@@ -310,8 +315,10 @@
   min-width: 210px;
   justify-content: center;
 }
+/* The PnL readout is a value, not a label, so it stays on the data face — which
+   is also the only one of the two with a real 800. */
 .mrd-vitalstrip .cell.hero .v {
-  font-family: var(--font-display);
+  font-family: var(--font-data);
   font-size: clamp(26px, 3.4vw, 40px);
   font-weight: 800;
   line-height: .95;
@@ -606,32 +613,36 @@
 .mrd-logo-img { width: 16px; height: 16px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
 .mrd-logo-letter { width: 16px; height: 16px; border-radius: 50%; flex-shrink: 0; background: linear-gradient(135deg,#2dd4bf,#8b5cf6); display: inline-flex; align-items: center; justify-content: center; font-size: 8px; font-weight: 800; color: #06121b; line-height: 1; font-style: normal; }
 
-/* Tracking correction for the display face. Every value below replaces one that
-   was tuned for a narrow mono; Martian Mono carries that width in the glyphs
-   already, so re-applying .18–.2em here would break rows onto two lines. Kept
-   in one block at the end of the file so it wins on source order and the
-   correction stays reviewable in one place rather than scattered. */
-.mrd-brand { letter-spacing: .06em; }
-.mrd-panel-label { letter-spacing: .1em; }
-.mrd-panel-right { letter-spacing: .06em; }
-.mrd-tab { letter-spacing: .06em; }
-.mrd-rail-btn { letter-spacing: .05em; }
+/* Tracking for the display face, kept in one block at the end so it wins on
+   source order and stays reviewable together rather than scattered through the
+   file. DM Mono is a normal-width mono, so small uppercase labels want real
+   tracking to stay legible — unlike the wide face this replaced, which needed
+   the opposite correction. */
+.mrd-brand { letter-spacing: .14em; font-weight: 500; }
+.mrd-panel-label,
+.mrd-corner { letter-spacing: .18em; font-weight: 500; }
+.mrd-panel-right { letter-spacing: .13em; font-weight: 500; }
+.mrd-tab { letter-spacing: .14em; font-weight: 500; }
+.mrd-rail-btn { letter-spacing: .13em; font-weight: 500; }
 .mrd-navmode,
-.mrd-navmode-btn { letter-spacing: .06em; }
-.mrd-postab { letter-spacing: .08em; }
+.mrd-navmode-btn { letter-spacing: .13em; font-weight: 500; }
+.mrd-postab { letter-spacing: .16em; font-weight: 500; }
 .mrd-pos-head,
 .mrd-cand-head,
 .mrd-pf-head,
-.mrd-log-full-head { letter-spacing: .08em; }
-.mrd-postabs-note { letter-spacing: .06em; }
+.mrd-log-full-head { letter-spacing: .16em; font-weight: 500; }
+.mrd-postabs-note { letter-spacing: .14em; font-weight: 500; }
+.mrd-vitalstrip .cell .k { letter-spacing: .18em; font-weight: 500; }
+.mrd-vitalstrip .metrics .k { letter-spacing: .14em; font-weight: 500; }
 .mrd-vital-row .k,
 .mrd-pf-summary .cell .k,
-.mrd-set-kv .k { letter-spacing: .1em; }
-.mrd-charts-head .title { letter-spacing: .02em; }
-.mrd-hints { letter-spacing: .06em; }
+.mrd-set-kv .k { letter-spacing: .16em; font-weight: 500; }
+.mrd-charts-head .title { letter-spacing: .12em; font-weight: 500; }
+.mrd-hints { letter-spacing: .13em; font-weight: 500; }
+.mrd-hint .key { font-weight: 500; }
 .flag,
-.badge-live { letter-spacing: .06em; }
-.mrd-log-badge { letter-spacing: 0; font-weight: 700; }
+.badge-live { letter-spacing: .14em; font-weight: 500; }
+.mrd-log-badge { letter-spacing: .04em; font-weight: 500; }
 
 /* Responsive. The status line is one nowrap row with overflow hidden, so on a
    narrow screen it silently truncates from the right — and the clock and date
