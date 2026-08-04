@@ -919,8 +919,12 @@ pub fn resolve_pending_peak_with_pnl(
         );
         pos.trailing.peak_pnl_pct = Some(confirmed_peak);
 
-        // Activate trailing if above trigger
-        pos.trailing.trailing_active = true;
+        // Do NOT force-activate trailing here. Activation is owned by
+        // update_trailing_state, which only arms once the confirmed peak reaches
+        // trailing_trigger_pct (+10%). Unconditionally setting it true armed
+        // trailing on tiny ~0% peaks, so a 3% drop fired "Trailing TP" at a LOSS
+        // long before the trigger was ever hit (e.g. FROGE closed -3.76% off a
+        // 0.13% peak). Let the trigger gate decide.
 
         return (true, Some(confirmed_peak));
     }
