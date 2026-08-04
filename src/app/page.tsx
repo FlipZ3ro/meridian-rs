@@ -1,10 +1,10 @@
-import DashboardLayout from '../components/layout/DashboardLayout';
+import MeridianTerminal from '../components/terminal/MeridianTerminal';
 import { AuthGate } from '../components/auth/AuthGate';
 
 export default function Page() {
   return (
     <AuthGate>
-      <DashboardLayout />
+      <MeridianTerminal />
     </AuthGate>
   );
 }

@@ -1,4 +1,5 @@
 import '../styles/theme.css';
+import '../styles/terminal.css';
 import type React from 'react';
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
