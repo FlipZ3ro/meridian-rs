@@ -526,20 +526,26 @@ async fn main() -> Result<()> {
                         warn("pnl_poll", &format!("Failed to save poll state: {}", e));
                     }
 
-                    // Sweep leftover tokens / wSOL from just-closed positions back
-                    // to SOL promptly (self-throttled ~60s). Runs on the 30s poll,
-                    // not just the 3-min management cycle, so a closed position's
-                    // residual doesn't sit as floating-loss inventory for minutes.
-                    let swept = crate::tools::wallet::sweep_dust_to_sol(
-                        &config_pnl,
-                        &std::collections::HashSet::new(),
-                    )
-                    .await;
-                    if swept > 0 {
-                        info(
-                            "pnl_poll",
-                            &format!("dust sweep: cleared {} leftover(s) to SOL", swept),
-                        );
+                    // Sweep leftover tokens / wSOL back to SOL — but ONLY when the
+                    // wallet is flat (no open positions). Swapping/unwrapping while
+                    // a position is open closes the shared wSOL ATA and any open
+                    // position's token ATA (the Jupiter swap-to-SOL also unwraps
+                    // wSOL as a side effect), so the next claim/close fails with
+                    // AccountNotInitialized (user_token_y). Per-close unwrap already
+                    // frees each closed position's wSOL principal, so gating the
+                    // periodic sweep on flat costs nothing but eliminates the race.
+                    if positions.get_active().is_empty() {
+                        let swept = crate::tools::wallet::sweep_dust_to_sol(
+                            &config_pnl,
+                            &std::collections::HashSet::new(),
+                        )
+                        .await;
+                        if swept > 0 {
+                            info(
+                                "pnl_poll",
+                                &format!("dust sweep: cleared {} leftover(s) to SOL", swept),
+                            );
+                        }
                     }
                 }
                 Err(e) => {
