@@ -480,15 +480,37 @@ async fn unwrap_wsol(rpc: &RpcClient, keypair: &Keypair) -> Result<Option<String
         .await
         .map_err(|e| anyhow!("list wSOL token accounts: {}", e))?;
 
-    let instructions: Vec<Instruction> = accounts
-        .iter()
-        .filter_map(|acc| Pubkey::from_str(&acc.pubkey).ok())
-        .map(|account| close_wsol_account_ix(token_program, account, owner))
-        .collect();
+    // Only unwrap wSOL accounts that actually hold a wrapped balance. There is a
+    // single canonical wSOL ATA shared by every position's token_y, so closing an
+    // already-empty one and recreating it below would send a pointless tx on
+    // every ~60s sweep (churn). Skipping empties makes the recreated empty ATA
+    // stable across sweeps.
+    let mut instructions: Vec<Instruction> = Vec::new();
+    for acc in &accounts {
+        let Ok(account) = Pubkey::from_str(&acc.pubkey) else {
+            continue;
+        };
+        let balance = rpc
+            .get_token_account_balance(&account)
+            .await
+            .ok()
+            .and_then(|b| b.ui_amount)
+            .unwrap_or(0.0);
+        if balance > 0.0 {
+            instructions.push(close_wsol_account_ix(token_program, account, owner));
+        }
+    }
 
     if instructions.is_empty() {
         return Ok(None);
     }
+
+    // Recreate the canonical wSOL ATA (empty) in the SAME transaction. Closing
+    // the shared wSOL account to reclaim native SOL would otherwise leave every
+    // still-open position failing its claim/close with AccountNotInitialized
+    // until the next per-close recreate — the race that stuck FROGE/STONK. Doing
+    // close+recreate atomically means the ATA is never observably missing.
+    instructions.push(create_ata_idempotent_ix(&owner, &owner, &wsol_mint, &token_program));
 
     let blockhash = rpc
         .get_latest_blockhash()
