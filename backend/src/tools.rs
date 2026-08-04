@@ -7,6 +7,7 @@ pub mod discord_signals;
 pub mod dlmm;
 pub mod executor;
 pub mod gmgn;
+pub mod lpagent;
 pub mod meteora_native;
 pub mod quickflip;
 pub mod screening;
