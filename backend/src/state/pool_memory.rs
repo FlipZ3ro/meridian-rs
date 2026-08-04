@@ -367,6 +367,18 @@ impl PoolMemoryStore {
                             CHURN_MAX_HOLD_SECS / 60,
                             cooldown_hours
                         );
+                        crate::utils::logger::module::warn(
+                            "cooldown",
+                            &format!(
+                                "churn cooldown — {} ({})",
+                                if entry.base_mint.is_empty() {
+                                    "pool"
+                                } else {
+                                    &entry.base_mint
+                                },
+                                reason
+                            ),
+                        );
                         if scope == "pool" || scope == "both" || entry.base_mint.is_empty() {
                             set_pool_cooldown_hours(entry, cooldown_hours, &reason);
                         }
