@@ -602,6 +602,17 @@ pub async fn swap_token(
     if slippage_bps > 0 {
         url = format!("{}&slippageBps={}", url, slippage_bps);
     }
+    // Keep Jupiter away from the wSOL account. By default it unwraps SOL at the
+    // end of a swap, which CLOSES the single wSOL associated token account that
+    // every open position's SOL side resolves to — any claim or close in flight
+    // then fails with AccountNotInitialized (0xbc4). Observed live: two swaps
+    // during a stop-loss cleanup knocked out a concurrent claim, and even the
+    // commons retry lost the same race.
+    //
+    // With this off the proceeds land as wSOL instead, and our own sweep
+    // unwraps them deliberately — that path closes and recreates the account in
+    // a single atomic transaction, so it is never observably missing.
+    url = format!("{}&wrapAndUnwrapSol=false", url);
 
     let referral_params = get_referral_params(config).map(|(account, configured_bps)| {
         let fee_bps = if (50..=255).contains(&referral_bps) {
