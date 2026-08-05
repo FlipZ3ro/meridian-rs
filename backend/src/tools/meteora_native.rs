@@ -563,7 +563,7 @@ pub async fn claim_fees_commons(
     use solana_client::nonblocking::rpc_client::RpcClient as RpcClientV2;
     use solana_sdk::instruction::Instruction as InstructionV2;
     use solana_sdk::pubkey::Pubkey as PubkeyV2;
-    use solana_sdk::signature::{Keypair as KeypairV2, Signer as SignerV2};
+    use solana_sdk::signature::Signer as SignerV2;
     use solana_sdk::transaction::Transaction as TransactionV2;
 
     let secret = wallet_secret_from_env()?;
