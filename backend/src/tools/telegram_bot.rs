@@ -270,6 +270,7 @@ async fn send_with_refresh(
     let body = serde_json::json!({
         "chat_id": chat,
         "text": stamped(text),
+        "parse_mode": "Markdown",
         "reply_markup": refresh_markup(cmd),
     });
     if let Err(e) = client.post(&url).json(&body).send().await {
@@ -290,6 +291,7 @@ async fn edit_with_refresh(
         "chat_id": chat,
         "message_id": message_id,
         "text": stamped(text),
+        "parse_mode": "Markdown",
         "reply_markup": refresh_markup(cmd),
     });
     if let Err(e) = client.post(&url).json(&body).send().await {
@@ -696,14 +698,17 @@ async fn portfolio_text(config: &Config, state_path: &str) -> String {
     let rent_locked = open.len() as f64 * 0.0574 * sol_price;
 
     let net = r_pnl + r_fees + u_pnl + u_fees;
-    let mut out = format!(
-        "💰 *PORTFOLIO*
+    // Monospace block: the numbers line up in a column, which is the whole
+    // point of a portfolio view on a phone. Markdown inside a fence is inert,
+    // so alignment is done with padding rather than bold.
+    let mut body = format!(
+        "REALIZED  {:>3} closed   {:>+8.2}
+  pnl {:>+9.2}
+  fee {:>+9.2}
 
-         *Realized* ({} closed)  *{:+.2}*
-  pnl {:+.2} · fee +{:.2}
-
-         *Unrealized* ({} open)  *{:+.2}*
-  pnl {:+.2} · fee +{:.2}",
+         UNREALIZED{:>3} open     {:>+8.2}
+  pnl {:>+9.2}
+  fee {:>+9.2}",
         closed.len(),
         r_pnl + r_fees,
         r_pnl,
@@ -714,26 +719,34 @@ async fn portfolio_text(config: &Config, state_path: &str) -> String {
         u_fees,
     );
     if rent_locked > 0.0 {
-        out.push_str(&format!(
+        body.push_str(&format!(
             "
 
-🔒 Rent terkunci: {:.2} USD ({} × 0.057 SOL) — balik saat close",
+rent locked {:>10.2}
+  ({} x 0.057 SOL, refunded on close)",
             rent_locked,
             open.len()
         ));
     }
-    out.push_str(&format!("
-
-━━━━━━━━━━
-*NET: {:+.2} USD*", net));
+    body.push_str(&format!(
+        "
+{}
+NET       {:>16.2}",
+        "-".repeat(30),
+        net
+    ));
     if !closed.is_empty() {
-        out.push_str(&format!(
+        body.push_str(&format!(
             "
-Win rate {:.0}% ({}/{})",
+win rate  {:>11.0}%  {}/{}",
             wins as f64 / closed.len() as f64 * 100.0,
             wins,
             closed.len()
         ));
     }
-    out
+    format!("💰 *PORTFOLIO*
+
+```
+{body}
+```")
 }
