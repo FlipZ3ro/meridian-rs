@@ -308,8 +308,34 @@ impl PositionState {
                         "state save: preserving positions added by another task"
                     );
                 }
+                // Whose copy of a position wins is decided by the DATA, not by
+                // who saved last. Preserving only positions the saver had never
+                // seen was not enough: a task holding a pre-close snapshot
+                // happily overwrote a closed position with its own stale open
+                // version, wiping close_reason, closed_at and the final PnL —
+                // a stop-loss recorded at -6.74% reappeared as -0.48%, and the
+                // daily brief lost the field it groups closes by.
                 for (id, pos) in &self.positions {
-                    disk.positions.insert(id.clone(), pos.clone());
+                    let disk_wins = match disk.positions.get(id) {
+                        Some(d) if d.status == PositionStatus::Closed => {
+                            // Closed is terminal — never regress it. Between two
+                            // closed copies, keep the one carrying the close
+                            // metadata.
+                            pos.status != PositionStatus::Closed
+                                || (d.closed_at.is_some() && pos.closed_at.is_none())
+                        }
+                        // Both open: the fresher poll wins, by its own timestamp
+                        // rather than by save order.
+                        Some(d) => match (&d.pnl_updated_at, &pos.pnl_updated_at) {
+                            (Some(disk_at), Some(mem_at)) => disk_at > mem_at,
+                            (Some(_), None) => true,
+                            _ => false,
+                        },
+                        None => false,
+                    };
+                    if !disk_wins {
+                        disk.positions.insert(id.clone(), pos.clone());
+                    }
                 }
                 disk.recent_events = self.recent_events.clone();
                 disk.last_updated = self.last_updated.clone();
