@@ -393,7 +393,7 @@ async fn handle(
                 "⚪ Quick-flip OFF — scalper paused (open flip position still managed).".to_string()
             }
         }
-        "pnl" => portfolio_text(config).await,
+        "pnl" => portfolio_text(config, state_path).await,
         "status" => {
             let flag = if crate::cycle::is_trading_enabled() {
                 "▶️ Trading ENABLED"
@@ -642,7 +642,7 @@ fn truncate(s: &str) -> String {
 
 /// Portfolio PnL summary matching the dashboard: realized (closed) + unrealized
 /// (open) across all pools the wallet has touched, sourced from Meteora.
-async fn portfolio_text(config: &Config) -> String {
+async fn portfolio_text(config: &Config, state_path: &str) -> String {
     // Prefer the public MERIDIAN_WALLET address (read-only, no private key
     // needed); fall back to deriving from the signing keypair if that's all set.
     let wallet = std::env::var("MERIDIAN_WALLET")
@@ -675,9 +675,28 @@ async fn portfolio_text(config: &Config) -> String {
             wins += h.win_count;
         }
     }
+    // Unrealized comes from the bot's own state, not the pool API. The API only
+    // sees a position once it has been indexed, so a position opened minutes
+    // ago reads as $0.00 — which is exactly when you want to look. The poller
+    // refreshes these figures every 15s, so they are both fresher and
+    // authoritative. Falls back to the API when state has nothing (e.g. a
+    // wallet whose positions this bot did not open).
     let mut unrealized = 0.0;
-    for (pool, _) in &pools {
-        unrealized += crate::tools::dlmm::get_pool_open_pnl(pool, &wallet).await;
+    let mut open_fees = 0.0;
+    let mut open_count = 0usize;
+    if let Ok(state) = crate::state::positions::PositionState::load(state_path) {
+        for p in state.get_active() {
+            unrealized += p.pnl_usd.unwrap_or(0.0);
+            open_fees += p.all_time_fees_usd.unwrap_or(0.0);
+            open_count += 1;
+        }
+    }
+    if open_count == 0 {
+        for (pool, _) in &pools {
+            unrealized += crate::tools::dlmm::get_pool_open_pnl(pool, &wallet).await;
+        }
+    } else {
+        fees += open_fees;
     }
     let total = realized + unrealized;
     let pct = if deposit > 0.0 {
