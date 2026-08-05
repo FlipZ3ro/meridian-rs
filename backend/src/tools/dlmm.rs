@@ -10,7 +10,7 @@ fn meridian_cli() -> String {
     std::env::var("MERIDIAN_CLI").unwrap_or_else(|_| "/root/meridian/cli.js".to_string())
 }
 
-fn is_dry_run(config: &Config) -> bool {
+pub fn is_dry_run(config: &Config) -> bool {
     config.dry_run || std::env::var("DRY_RUN").ok().as_deref() == Some("true")
 }
 
