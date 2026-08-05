@@ -137,6 +137,25 @@ pub struct TrackedPosition {
     pub out_of_range_since: Option<String>,
     #[serde(default)]
     pub pnl_sol: Option<f64>,
+    /// Live PnL percent from the most recent pnl poll. Persisted so a close can
+    /// record what the position was actually worth: before this existed the
+    /// poller computed PnL only to drive exit rules and threw it away, so every
+    /// close recorded 0.0 SOL / null pct and profitability was unmeasurable.
+    #[serde(default)]
+    pub pnl_pct: Option<f64>,
+    /// Live PnL in USD from the most recent pnl poll.
+    #[serde(default)]
+    pub pnl_usd: Option<f64>,
+    /// Unclaimed (accrued but not yet harvested) fees in USD, last poll.
+    #[serde(default)]
+    pub unclaimed_fee_usd: Option<f64>,
+    /// All-time fees this position has earned in USD (claimed + unclaimed) as
+    /// reported by the PnL API — survives the claim path failing to record.
+    #[serde(default)]
+    pub all_time_fees_usd: Option<f64>,
+    /// Timestamp of the last successful pnl poll, so a stale figure is visible.
+    #[serde(default)]
+    pub pnl_updated_at: Option<String>,
     #[serde(default)]
     pub trailing: TrailingState,
     /// Pre-deploy signal snapshot (arbitrary JSON for metrics at deploy time)
@@ -182,6 +201,11 @@ impl Default for TrackedPosition {
             note: None,
             out_of_range_since: None,
             pnl_sol: None,
+            pnl_pct: None,
+            pnl_usd: None,
+            unclaimed_fee_usd: None,
+            all_time_fees_usd: None,
+            pnl_updated_at: None,
             trailing: TrailingState::default(),
             signal_snapshot: None,
             last_managed_at: None,
@@ -919,8 +943,12 @@ pub fn resolve_pending_peak_with_pnl(
         );
         pos.trailing.peak_pnl_pct = Some(confirmed_peak);
 
-        // Activate trailing if above trigger
-        pos.trailing.trailing_active = true;
+        // Do NOT force-activate trailing here. Activation is owned by
+        // update_trailing_state, which only arms once the confirmed peak reaches
+        // trailing_trigger_pct (+10%). Unconditionally setting it true armed
+        // trailing on tiny ~0% peaks, so a 3% drop fired "Trailing TP" at a LOSS
+        // long before the trigger was ever hit (e.g. FROGE closed -3.76% off a
+        // 0.13% peak). Let the trigger gate decide.
 
         return (true, Some(confirmed_peak));
     }

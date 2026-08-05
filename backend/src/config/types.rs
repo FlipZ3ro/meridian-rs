@@ -237,11 +237,21 @@ pub struct ManagementConfig {
     pub exit_bb_upper_pctb: f64,
     #[serde(default)]
     pub exit_min_profit_pct: f64,
+    // ── Token-2022 gate ──────────────────────────────────────
+    // Refuse to deploy into pools whose base token is Token-2022: the wp SDK
+    // derives the user token account under classic SPL, so claim/close always
+    // fails with AccountNotInitialized on user_token_y and the position gets
+    // stuck. Set false once the commons migration handles Token-2022.
+    #[serde(default = "default_skip_token_2022")]
+    pub skip_token_2022: bool,
     // ── Display mode ─────────────────────────────────────────
     #[serde(default)]
     pub sol_mode: bool,
 }
 
+fn default_skip_token_2022() -> bool {
+    true
+}
 fn default_exit_overextended_enabled() -> bool {
     true
 }
@@ -758,6 +768,7 @@ impl Default for Config {
                 exit_rsi_threshold: default_exit_rsi_threshold(),
                 exit_bb_upper_pctb: default_exit_bb_upper_pctb(),
                 exit_min_profit_pct: 0.0,
+                skip_token_2022: default_skip_token_2022(),
                 sol_mode: false,
             },
             risk: RiskConfig {

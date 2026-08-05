@@ -74,6 +74,20 @@ fn set_json_string_if_missing(value: &mut Value, key: &str, content: Option<&str
     }
 }
 
+/// True when a close reason represents a risk cut (the position was closed
+/// because it was losing), as opposed to a take-profit or a range exit. Matched
+/// on the reason text because the deterministic pnl-poll closes pass their rule
+/// name through as free text (e.g. "auto-close (pnl_poll): stop loss"). These
+/// always deserve a re-entry cooldown regardless of whether a pnl figure was
+/// available at close time.
+fn is_risk_cut_reason(reason: &str) -> bool {
+    let reason = reason.to_ascii_lowercase();
+    reason.contains("stop loss")
+        || reason.contains("stop-loss")
+        || reason.contains("stoploss")
+        || reason.contains("safety exit")
+}
+
 fn find_tracked_position<'a>(
     args: &Value,
     positions: &'a PositionState,
@@ -518,8 +532,8 @@ impl ToolExecutor {
                         .await
                         .ok(),
                 };
-                if let Some(base_mint) = dup_base_mint {
-                    let normalized = normalize_mint(&base_mint);
+                if let Some(base_mint) = dup_base_mint.as_deref() {
+                    let normalized = normalize_mint(base_mint);
                     let has_dup = active
                         .iter()
                         .any(|p| normalize_mint(&p.base_mint) == normalized);
@@ -531,16 +545,46 @@ impl ToolExecutor {
                     }
                 }
 
-                // Pool cooldown check
-                if pool_memory.is_on_cooldown(pool_addr) {
+                // Token-2022 gate. The wp claim/close one-shots derive the user
+                // token account under classic SPL, so a Token-2022 base token
+                // (token_y) can never be claimed or closed cleanly — every attempt
+                // fails with AccountNotInitialized on user_token_y and the position
+                // gets stuck retrying every poll (TikTok/CATE/HORSE today). Until
+                // the commons migration gives us Token-2022-aware tx building, don't
+                // enter these pools at all. RPC error → allowed (never block trading
+                // on a transient hiccup).
+                if config.management.skip_token_2022 {
+                    if let Some(base_mint) = dup_base_mint.as_deref() {
+                        if crate::tools::meteora_native::is_token_2022_mint(config, base_mint).await
+                        {
+                            anyhow::bail!(
+                                "Token-2022 base token {} — skipping (claim/close unsupported by the wp SDK, positions get stuck)",
+                                &base_mint[..8.min(base_mint.len())]
+                            );
+                        }
+                    }
+                }
+
+                // Pool cooldown check. MUST use is_pool_on_cooldown: the
+                // `is_on_cooldown` alias resolves to is_base_mint_on_cooldown,
+                // which compares its argument against each entry's base_mint — so
+                // passing a POOL address there could never match and this gate was
+                // a permanent no-op. Every cooldown the bot wrote went unenforced,
+                // which is how CATE was redeployed 3 minutes after stopping out
+                // and FROGE 6 minutes after its pool was cooled down.
+                if pool_memory.is_pool_on_cooldown(pool_addr) {
                     anyhow::bail!(
                         "pool {} is on cooldown — recently closed at loss",
                         &pool_addr[..12.min(pool_addr.len())]
                     );
                 }
-                // Token cooldown check (check base_mint)
-                if let Some(base_mint) = args["base_mint"].as_str() {
-                    if !base_mint.is_empty() && pool_memory.is_on_cooldown(base_mint) {
+                // Token cooldown check. Uses the base mint already resolved above
+                // (from the pool when absent from args) rather than reading
+                // args["base_mint"] directly — the screener's deploy_position
+                // passes only pool_address, so keying off args silently skipped
+                // this gate on exactly the path that opens most positions.
+                if let Some(base_mint) = dup_base_mint.as_deref() {
+                    if !base_mint.is_empty() && pool_memory.is_base_mint_on_cooldown(base_mint) {
                         anyhow::bail!(
                             "token {} is on cooldown",
                             &base_mint[..12.min(base_mint.len())]
@@ -861,11 +905,17 @@ impl ToolExecutor {
                                 symbol: pos.base_symbol.clone(),
                                 deployed_at: Some(pos.created_at.clone()),
                                 closed_at: Some(chrono::Utc::now().to_rfc3339()),
-                                pnl_pct: pos
-                                    .signal_snapshot
-                                    .as_ref()
-                                    .and_then(|s| s.get("pnlPct"))
-                                    .and_then(Value::as_f64),
+                                // Live PnL persisted by the pnl poll. Falls back to
+                                // the deploy-time signal snapshot only if a poll
+                                // never landed — reading the snapshot first was why
+                                // every pool-memory record stored a null pnl_pct
+                                // (the snapshot holds entry data, not exit data).
+                                pnl_pct: pos.pnl_pct.or_else(|| {
+                                    pos.signal_snapshot
+                                        .as_ref()
+                                        .and_then(|s| s.get("pnlPct"))
+                                        .and_then(Value::as_f64)
+                                }),
                                 fees_earned_sol: Some(pos.total_fees_claimed),
                                 close_reason: Some(reason.to_string()),
                                 strategy: pos
@@ -906,10 +956,13 @@ impl ToolExecutor {
                         // (fire-and-forget; failures are logged and non-blocking).
                         if crate::hivemind::is_enabled(&config.hive_mind) {
                             let pnl_pct = pos
-                                .signal_snapshot
-                                .as_ref()
-                                .and_then(|s| s.get("pnlPct"))
-                                .and_then(Value::as_f64)
+                                .pnl_pct
+                                .or_else(|| {
+                                    pos.signal_snapshot
+                                        .as_ref()
+                                        .and_then(|s| s.get("pnlPct"))
+                                        .and_then(Value::as_f64)
+                                })
                                 .unwrap_or(0.0);
                             let strategy = pos
                                 .signal_snapshot
@@ -971,23 +1024,58 @@ impl ToolExecutor {
                     }
                 }
 
-                // Set cooldown on loss closes to prevent re-entry
-                if let Some(pos) = positions.positions.get(pid) {
-                    if let Some(pnl) = pos.pnl_sol {
-                        if pnl < 0.0 {
-                            // Cooldown pool for 1 hour
-                            pool_memory.set_pool_cooldown(&pos.pool_address, "loss_close", 60);
-                            // Cooldown token too
-                            pool_memory.set_base_mint_cooldown_minutes(
-                                &pos.base_mint,
-                                60,
-                                "loss_close",
-                            );
-                            info(
-                                "executor",
-                                &format!("Set 1h cooldown on pool/token after {:.4} SOL loss", pnl),
-                            );
-                        }
+                // Set cooldown on loss closes to prevent re-entry.
+                //
+                // A risk-cut close (stop loss / safety exit) ALWAYS cools the pool
+                // and token down, even when pnl_sol was never populated — it stays
+                // None whenever the position quote failed, which is permanent for
+                // Token-2022 positions. Gating solely on `pnl_sol < 0` meant those
+                // stop-losses set NO cooldown at all (the other cooldown paths in
+                // pool_memory need an OOR reason or `pnl_pct.is_some()`), so the
+                // screener re-entered the same dumping token minutes later: CATE
+                // stopped out twice inside 40 minutes, 2m50s apart, with zero fees.
+                //
+                // The pnl-based arm uses `risk.cooldownLossPct` (default -5%) as
+                // the materiality threshold. `pnl_sol < 0` would lock a pool for a
+                // whole hour over a -0.2% breakeven exit — noise, not a verdict on
+                // the pool — and with the candidate funnel as narrow as it is that
+                // starves the screener of the few workable pools it has. (This arm
+                // was dormant until PnL persistence landed, which is why the dead
+                // config went unnoticed; `cooldownDurationMin` was hardcoded too.)
+                //
+                // Uses find_tracked_position so a close addressed by
+                // position_address (pid empty) is covered too — that silently
+                // skipped the cooldown before.
+                if let Some(pos) = find_tracked_position(args, positions) {
+                    let reason = args["reason"].as_str().unwrap_or("");
+                    let risk_cut = is_risk_cut_reason(reason);
+                    let loss_threshold = config.risk.cooldown_loss_pct;
+                    let material_loss = pos.pnl_pct.is_some_and(|pct| pct <= loss_threshold);
+                    if risk_cut || material_loss {
+                        let pool_address = pos.pool_address.clone();
+                        let base_mint = pos.base_mint.clone();
+                        let minutes = config.risk.cooldown_duration_min;
+                        let detail = match (pos.pnl_pct, pos.pnl_sol) {
+                            (Some(pct), Some(sol)) => {
+                                format!("{:.2}% ({:.4} SOL) loss", pct, sol)
+                            }
+                            (Some(pct), None) => format!("{:.2}% loss", pct),
+                            _ => format!("risk-cut close ({}), pnl unknown", reason),
+                        };
+                        pool_memory.set_pool_cooldown(&pool_address, "loss_close", minutes);
+                        // Cooldown token too
+                        pool_memory.set_base_mint_cooldown_minutes(
+                            &base_mint,
+                            minutes,
+                            "loss_close",
+                        );
+                        info(
+                            "executor",
+                            &format!(
+                                "Set {}min cooldown on pool/token after {}",
+                                minutes, detail
+                            ),
+                        );
                     }
                 }
 
@@ -1663,7 +1751,13 @@ impl ToolExecutor {
                     .as_f64()
                     .or(args["amount_sol"].as_f64())
                     .unwrap_or(0.0);
-                let bins_below = args["bins_below"].as_i64();
+                // Range width is OPERATOR-CONFIG-driven, not LLM-chosen: pass
+                // None so deploy_position sizes bins_below from the config
+                // (target_downside_pct + bin_step, clamped to [min,max]). Keeps
+                // the range consistent + tunable instead of whatever the LLM
+                // guesses per call.
+                let _ = args["bins_below"].as_i64(); // ignored on purpose
+                let bins_below: Option<i64> = None;
                 let bins_above = args["bins_above"].as_i64();
                 let strategy = args["strategy"].as_str();
                 match crate::tools::dlmm::deploy_position(
@@ -1928,17 +2022,20 @@ impl ToolExecutor {
                 if position.is_empty() {
                     anyhow::bail!("position_id or position_address required");
                 }
-                let skip_swap = args["skip_swap"]
-                    .as_bool()
-                    .or_else(|| args["skipSwap"].as_bool())
-                    .unwrap_or(false);
                 match claim_fees(position, config).await {
                     Ok(claim) => {
-                        // Same as close: swap the claimed base token back to SOL
-                        // so harvested fees compound instead of piling up as dust.
+                        // Do NOT auto-swap the claimed base token here. claim_fees
+                        // only ever runs on a STILL-OPEN position, and swapping the
+                        // claimed memecoin to SOL closes/races that position's
+                        // token_y ATA — which the position's next claim/close then
+                        // needs, failing with AccountNotInitialized and getting the
+                        // position stuck retrying every poll. Let the claimed fees
+                        // sit in the ATA (keeping it alive); the post-close
+                        // auto-swap reads the full wallet balance, so accumulated
+                        // fees are swept to SOL when the position finally closes.
                         let mut result = serde_json::to_value(&claim)?;
                         enrich_close_result_with_position_metadata(&mut result, args, positions);
-                        self.maybe_auto_swap_base_to_sol(&mut result, skip_swap, config)
+                        self.maybe_auto_swap_base_to_sol(&mut result, true, config)
                             .await?;
                         Ok(serde_json::to_string_pretty(&result)?)
                     }

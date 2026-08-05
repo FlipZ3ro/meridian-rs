@@ -12,6 +12,11 @@ const PVP_MIN_HOLDERS: u64 = 500;
 /// Score added per GMGN smart-money holder (capped at 25) on a candidate's base
 /// token. Modest vs the base score so it nudges ranking without dominating it.
 const SMART_MONEY_SCORE_WEIGHT: f64 = 25.0;
+/// Score boost weight for the LP Agent profitable-LPer ratio (0.0–1.0). A pool
+/// whose established LPers are all net-profitable gets the full boost.
+const LPER_SCORE_WEIGHT: f64 = 40.0;
+/// Win rate treated as neutral: above it a pool scores up, below it scores down.
+const LPER_NEUTRAL_WIN_RATE: f64 = 0.5;
 const PVP_MIN_GLOBAL_FEES_SOL: f64 = 30.0;
 
 static TIMEFRAME_MINUTES: &[(&str, u32)] = &[
@@ -293,31 +298,61 @@ impl Screener {
         candidates: &mut [CondensedPool],
         config: &crate::config::Config,
     ) {
-        if !crate::tools::gmgn::has_gmgn_api_key(config) {
+        let gmgn = crate::tools::gmgn::has_gmgn_api_key(config);
+        let lpagent = crate::tools::lpagent::has_lpagent_api_key();
+        if !gmgn && !lpagent {
             return;
         }
         for candidate in candidates.iter_mut() {
-            if candidate.base.mint.is_empty() {
-                continue;
-            }
-            if let Some(fees) =
-                crate::tools::gmgn::get_gmgn_token_fees(&candidate.base.mint, config).await
-            {
-                if let Some(total) = fees.total_fee {
-                    candidate.fees_sol = total;
+            if gmgn && !candidate.base.mint.is_empty() {
+                if let Some(fees) =
+                    crate::tools::gmgn::get_gmgn_token_fees(&candidate.base.mint, config).await
+                {
+                    if let Some(total) = fees.total_fee {
+                        candidate.fees_sol = total;
+                    }
+                }
+                // Smart-money quality signal: count GMGN-tagged smart-money
+                // holders on the base token and nudge the score up. Soft
+                // preference — never a hard gate.
+                if let Some(smart) =
+                    crate::tools::gmgn::get_smart_money_count(&candidate.base.mint, config).await
+                {
+                    candidate.smart_money_count = Some(smart);
+                    candidate.score += (smart.min(25) as f64) * SMART_MONEY_SCORE_WEIGHT;
                 }
             }
-            // Smart-money quality signal: count GMGN-tagged smart-money holders
-            // on the base token and nudge the score up. Soft preference — pools
-            // with smart backing rank higher — never a hard gate.
-            if let Some(smart) =
-                crate::tools::gmgn::get_smart_money_count(&candidate.base.mint, config).await
-            {
-                candidate.smart_money_count = Some(smart);
-                candidate.score += (smart.min(25) as f64) * SMART_MONEY_SCORE_WEIGHT;
+
+            // LP Agent quality signal: prefer pools whose established LPers are
+            // net-profitable (real-money proof the pool is a good place to LP).
+            // Soft score boost — never a hard gate.
+            if lpagent && !candidate.pool_address.is_empty() {
+                if let Some(win_rate) =
+                    crate::tools::lpagent::get_pool_lper_win_rate(&candidate.pool_address, config)
+                        .await
+                {
+                    // Score around the break-even point rather than adding a flat
+                    // positive: a pool where most LP positions LOSE should be
+                    // pushed down, not merely boosted less. Measured live win
+                    // rates span ~30%–52%, so 50% is a meaningful midpoint and the
+                    // signal now actually separates candidates.
+                    let centered = (win_rate - LPER_NEUTRAL_WIN_RATE) / LPER_NEUTRAL_WIN_RATE;
+                    candidate.score += centered.clamp(-1.0, 1.0) * LPER_SCORE_WEIGHT;
+                    if win_rate >= 0.5 || win_rate < 0.35 {
+                        info(
+                            "screening",
+                            &format!(
+                                "LPer quality {} — {:.0}% of LP positions profitable (SOL) → {}",
+                                candidate.name,
+                                win_rate * 100.0,
+                                if win_rate >= 0.5 { "boost" } else { "penalty" }
+                            ),
+                        );
+                    }
+                }
             }
         }
-        // Re-rank after the smart-money boost so preferred pools surface first.
+        // Re-rank after the boosts so preferred pools surface first.
         candidates.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)

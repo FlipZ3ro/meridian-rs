@@ -13,6 +13,11 @@ const LOW_YIELD_COOLDOWN_HOURS: u32 = 4;
 // at the token level so the screener stops re-deploying into it.
 const REPEAT_LOSS_TRIGGER: usize = 2;
 const REPEAT_LOSS_COOLDOWN_HOURS: u32 = 24;
+// Churn guard: repeatedly opening AND closing the same token within this many
+// seconds is pointless churn (burns fees/gas). Fast <1min closes often never
+// record pnl, so the fee-generating / repeat-loss checks miss them (STONK was
+// churned 16x/24h). Count short holds in the cooldown window and cool the token.
+const CHURN_MAX_HOLD_SECS: i64 = 120;
 const REPEAT_LOSS_THRESHOLD_PCT: f64 = -1.0; // ignore ~breakeven closes
 const MAX_NOTE_LENGTH: usize = 280;
 
@@ -320,6 +325,70 @@ impl PoolMemoryStore {
                             cooldown_hours,
                             reason,
                         ));
+                    }
+                }
+
+                // Short-hold churn guard: count open+close cycles shorter than
+                // CHURN_MAX_HOLD_SECS within the cooldown window. Catches pointless
+                // fast churn (STONK: 16x/24h, many <1min) that the pnl-gated check
+                // above misses when a quick close never records pnl. Longer-held
+                // profitable re-deploys (e.g. HORSE) don't match, so good tokens
+                // aren't penalized.
+                if cooldown_hours > 0 {
+                    let now = Utc::now();
+                    let window = Duration::hours(cooldown_hours as i64);
+                    let churn = entry
+                        .deploys
+                        .iter()
+                        .filter(|d| {
+                            let opened = d
+                                .deployed_at
+                                .as_deref()
+                                .and_then(|ts| DateTime::parse_from_rfc3339(ts).ok())
+                                .map(|t| t.with_timezone(&Utc));
+                            let closed = d
+                                .closed_at
+                                .as_deref()
+                                .and_then(|ts| DateTime::parse_from_rfc3339(ts).ok())
+                                .map(|t| t.with_timezone(&Utc));
+                            match (opened, closed) {
+                                (Some(o), Some(c)) => {
+                                    now - o < window
+                                        && (c - o).num_seconds() < CHURN_MAX_HOLD_SECS
+                                }
+                                _ => false,
+                            }
+                        })
+                        .count();
+                    if churn >= trigger_count {
+                        let reason = format!(
+                            "short-hold churn ({}x <{}m/{}h)",
+                            churn,
+                            CHURN_MAX_HOLD_SECS / 60,
+                            cooldown_hours
+                        );
+                        crate::utils::logger::module::warn(
+                            "cooldown",
+                            &format!(
+                                "churn cooldown — {} ({})",
+                                if entry.base_mint.is_empty() {
+                                    "pool"
+                                } else {
+                                    &entry.base_mint
+                                },
+                                reason
+                            ),
+                        );
+                        if scope == "pool" || scope == "both" || entry.base_mint.is_empty() {
+                            set_pool_cooldown_hours(entry, cooldown_hours, &reason);
+                        }
+                        if (scope == "token" || scope == "both") && !entry.base_mint.is_empty() {
+                            pending_base_cooldowns.push((
+                                entry.base_mint.clone(),
+                                cooldown_hours,
+                                reason,
+                            ));
+                        }
                     }
                 }
             }

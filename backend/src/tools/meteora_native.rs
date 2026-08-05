@@ -364,6 +364,9 @@ pub async fn claim_fees(position_address: &str, config: &Config) -> Result<Nativ
     let rpc_url = resolve_rpc_url(config);
     let rpc_client = RpcClient::new(rpc_url);
     let rpc_ctx = RpcContext::confirmed(Arc::new(rpc_client));
+    // Claim deposits fees into the wallet's token ATAs; recreate any the wSOL
+    // sweep closed so the one-shot doesn't fail with AccountNotInitialized.
+    ensure_position_atas(&rpc_ctx.client, &keypair, &position).await;
     let params = ClaimFeeParams {
         position_address: position,
         authority: keypair.pubkey(),
@@ -534,6 +537,10 @@ const SPL_TOKEN_PROGRAM_ID: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 const WSOL_MINT: &str = "So11111111111111111111111111111111111111112";
 /// SPL Token `CloseAccount` instruction discriminator.
 const SPL_TOKEN_CLOSE_ACCOUNT_IX: u8 = 9;
+/// Associated Token Account program id.
+const ATA_PROGRAM_ID: &str = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
+/// ATA program `CreateIdempotent` instruction discriminator.
+const ATA_CREATE_IDEMPOTENT_IX: u8 = 1;
 
 /// Close every wSOL token account owned by `keypair`, unwrapping the balance
 /// (wrapped principal + account rent) back to native SOL on the same wallet.
@@ -577,15 +584,37 @@ async fn unwrap_wsol(rpc: &RpcClient, keypair: &Keypair) -> Result<Option<String
         .await
         .map_err(|e| anyhow!("list wSOL token accounts: {}", e))?;
 
-    let instructions: Vec<Instruction> = accounts
-        .iter()
-        .filter_map(|acc| Pubkey::from_str(&acc.pubkey).ok())
-        .map(|account| close_wsol_account_ix(token_program, account, owner))
-        .collect();
+    // Only unwrap wSOL accounts that actually hold a wrapped balance. There is a
+    // single canonical wSOL ATA shared by every position's token_y, so closing an
+    // already-empty one and recreating it below would send a pointless tx on
+    // every ~60s sweep (churn). Skipping empties makes the recreated empty ATA
+    // stable across sweeps.
+    let mut instructions: Vec<Instruction> = Vec::new();
+    for acc in &accounts {
+        let Ok(account) = Pubkey::from_str(&acc.pubkey) else {
+            continue;
+        };
+        let balance = rpc
+            .get_token_account_balance(&account)
+            .await
+            .ok()
+            .and_then(|b| b.ui_amount)
+            .unwrap_or(0.0);
+        if balance > 0.0 {
+            instructions.push(close_wsol_account_ix(token_program, account, owner));
+        }
+    }
 
     if instructions.is_empty() {
         return Ok(None);
     }
+
+    // Recreate the canonical wSOL ATA (empty) in the SAME transaction. Closing
+    // the shared wSOL account to reclaim native SOL would otherwise leave every
+    // still-open position failing its claim/close with AccountNotInitialized
+    // until the next per-close recreate — the race that stuck FROGE/STONK. Doing
+    // close+recreate atomically means the ATA is never observably missing.
+    instructions.push(create_ata_idempotent_ix(&owner, &owner, &wsol_mint, &token_program));
 
     let blockhash = rpc
         .get_latest_blockhash()
@@ -598,6 +627,16 @@ async fn unwrap_wsol(rpc: &RpcClient, keypair: &Keypair) -> Result<Option<String
         .map_err(|e| anyhow!("send wSOL unwrap tx: {}", e))?;
 
     Ok(Some(signature.to_string()))
+}
+
+/// Close any wSOL token accounts the wallet holds, converting wrapped SOL back
+/// to native SOL. Safety net for residual wSOL when the per-close unwrap missed
+/// or failed transiently (e.g. a race with a concurrent op). Uses the env
+/// signing keypair. Returns the tx signature, or None if there was no wSOL.
+pub async fn unwrap_all_wsol(config: &Config) -> Result<Option<String>> {
+    let keypair = keypair_from_secret(&wallet_secret_from_env()?)?;
+    let rpc = RpcClient::new(resolve_rpc_url(config));
+    unwrap_wsol(&rpc, &keypair).await
 }
 
 /// Resolve a position's base mint (the pool's token_x) on-chain. Reads the
@@ -620,6 +659,154 @@ async fn resolve_base_mint(rpc: &RpcClient, position: &Pubkey) -> Result<String>
         .map_err(|e| anyhow!("fetch lb_pair account: {}", e))?;
     let pair = LbPair::from_bytes(&pair_data).map_err(|e| anyhow!("decode lb_pair: {}", e))?;
     Ok(pair.token_x_mint.to_string())
+}
+
+/// Resolve a position's pool mints as `(token_x_mint, token_y_mint)`. Same read
+/// path as [`resolve_base_mint`] but returns both sides so the close/claim ATA
+/// pre-create can cover whichever token account is missing.
+async fn resolve_pool_mints(rpc: &RpcClient, position: &Pubkey) -> Result<(Pubkey, Pubkey)> {
+    let pos_data = rpc
+        .get_account_data(position)
+        .await
+        .map_err(|e| anyhow!("fetch position account: {}", e))?;
+    if pos_data.len() < 40 {
+        anyhow::bail!("position account too small to contain lb_pair");
+    }
+    let lb_pair = Pubkey::try_from(&pos_data[8..40])
+        .map_err(|_| anyhow!("invalid lb_pair bytes in position account"))?;
+    let pair_data = rpc
+        .get_account_data(&lb_pair)
+        .await
+        .map_err(|e| anyhow!("fetch lb_pair account: {}", e))?;
+    let pair = LbPair::from_bytes(&pair_data).map_err(|e| anyhow!("decode lb_pair: {}", e))?;
+    let mint_x = Pubkey::from_str(&pair.token_x_mint.to_string())?;
+    let mint_y = Pubkey::from_str(&pair.token_y_mint.to_string())?;
+    Ok((mint_x, mint_y))
+}
+
+/// Detect which token program owns `mint` (classic SPL vs Token-2022) by reading
+/// the mint account's owner — the account's owner *is* its token program. Falls
+/// back to classic SPL when the account can't be read, which is the correct
+/// default for the wSOL side and any classic mint.
+async fn detect_token_program(rpc: &RpcClient, mint: &Pubkey) -> Pubkey {
+    match rpc.get_account(mint).await {
+        Ok(acc) => acc.owner,
+        Err(_) => Pubkey::from_str(SPL_TOKEN_PROGRAM_ID).expect("valid SPL token program id"),
+    }
+}
+
+/// Token-2022 program id.
+const TOKEN_2022_PROGRAM_ID: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
+
+/// True if `mint` is a Token-2022 mint (owned by the Token-2022 program). Used to
+/// screen out Token-2022 (pump.fun) pools at deploy: the wp claim/close one-shots
+/// derive the user token ATA under classic SPL, so a Token-2022 token_y can't be
+/// claimed/closed cleanly (AccountNotInitialized on user_token_y) and the position
+/// gets stuck. Returns false on RPC error — never block trading on a transient
+/// hiccup.
+pub async fn is_token_2022_mint(config: &Config, mint: &str) -> bool {
+    let Ok(pubkey) = Pubkey::from_str(mint) else {
+        return false;
+    };
+    let rpc = RpcClient::new(resolve_rpc_url(config));
+    match rpc.get_account(&pubkey).await {
+        Ok(acc) => acc.owner.to_string() == TOKEN_2022_PROGRAM_ID,
+        Err(_) => false,
+    }
+}
+
+/// Derive the associated token account address for `owner`/`mint` under
+/// `token_program`. Classic SPL and Token-2022 derive to *different* addresses,
+/// so the program must be the one that actually owns the mint.
+fn derive_ata(owner: &Pubkey, mint: &Pubkey, token_program: &Pubkey) -> Pubkey {
+    let ata_program = Pubkey::from_str(ATA_PROGRAM_ID).expect("valid ATA program id");
+    Pubkey::find_program_address(
+        &[owner.as_ref(), token_program.as_ref(), mint.as_ref()],
+        &ata_program,
+    )
+    .0
+}
+
+/// Build an ATA `CreateIdempotent` instruction by hand (no spl-associated-token
+/// crate, to keep the v3 transaction stack free of clashing solana types). Safe
+/// to send even when the ATA already exists — it becomes a no-op.
+fn create_ata_idempotent_ix(
+    payer: &Pubkey,
+    owner: &Pubkey,
+    mint: &Pubkey,
+    token_program: &Pubkey,
+) -> solana_sdk_v3::instruction::Instruction {
+    use solana_sdk_v3::instruction::{AccountMeta, Instruction};
+    let ata_program = Pubkey::from_str(ATA_PROGRAM_ID).expect("valid ATA program id");
+    let ata = derive_ata(owner, mint, token_program);
+    Instruction {
+        program_id: ata_program,
+        accounts: vec![
+            AccountMeta::new(*payer, true),                   // funding account (signer, writable)
+            AccountMeta::new(ata, false),                     // ATA to create (writable)
+            AccountMeta::new_readonly(*owner, false),         // wallet that owns the ATA
+            AccountMeta::new_readonly(*mint, false),          // token mint
+            AccountMeta::new_readonly(
+                Pubkey::from_str("11111111111111111111111111111111").expect("valid system program id"),
+                false,
+            ),
+            AccountMeta::new_readonly(*token_program, false), // SPL or Token-2022
+        ],
+        data: vec![ATA_CREATE_IDEMPOTENT_IX],
+    }
+}
+
+/// Ensure the wallet's associated token accounts for both of a position's pool
+/// mints exist before a close/claim. The wp close/claim one-shots send the
+/// removed principal and fees to these ATAs and fail with `AccountNotInitialized`
+/// if the destination is missing — which happens because the periodic wSOL sweep
+/// ([`unwrap_all_wsol`]) closes the wSOL ATA between operations. Each mint's
+/// correct token program is detected on-chain so Token-2022 pools work too, and
+/// a create is only sent for an ATA that is actually missing so the common path
+/// (ATAs present) costs no extra transaction. Non-fatal: logs and returns on any
+/// error so a transient RPC hiccup never blocks a close.
+async fn ensure_position_atas(rpc: &RpcClient, keypair: &Keypair, position: &Pubkey) {
+    use solana_sdk_v3::instruction::Instruction;
+    use solana_sdk_v3::transaction::Transaction;
+
+    let owner = keypair.pubkey();
+    let (mint_x, mint_y) = match resolve_pool_mints(rpc, position).await {
+        Ok(mints) => mints,
+        Err(e) => {
+            tracing::warn!(error = %e, "could not resolve pool mints; skipping ATA pre-create");
+            return;
+        }
+    };
+
+    let mut instructions: Vec<Instruction> = Vec::new();
+    for mint in [mint_x, mint_y] {
+        let token_program = detect_token_program(rpc, &mint).await;
+        let ata = derive_ata(&owner, &mint, &token_program);
+        // Only (re)create an ATA that is genuinely missing — get_account errors
+        // for a nonexistent account.
+        if rpc.get_account(&ata).await.is_err() {
+            instructions.push(create_ata_idempotent_ix(&owner, &owner, &mint, &token_program));
+        }
+    }
+
+    if instructions.is_empty() {
+        return;
+    }
+
+    let blockhash = match rpc.get_latest_blockhash().await {
+        Ok(bh) => bh,
+        Err(e) => {
+            tracing::warn!(error = %e, "blockhash fetch failed; skipping ATA pre-create");
+            return;
+        }
+    };
+    let tx = Transaction::new_signed_with_payer(&instructions, Some(&owner), &[keypair], blockhash);
+    match rpc.send_and_confirm_transaction(&tx).await {
+        Ok(sig) => tracing::info!(signature = %sig, "recreated missing position ATA(s) before close/claim"),
+        Err(e) => {
+            tracing::warn!(error = %e, "ATA pre-create tx failed (close/claim may still succeed if ATAs exist)")
+        }
+    }
 }
 
 /// Sum the wallet's UI balance for a given SPL mint (across all of its token
@@ -746,6 +933,38 @@ pub async fn existing_positions(
             }
         }
     }
+
+    // Re-verify anything the first bulk call reported missing with a SECOND
+    // targeted fetch. `get_multiple_accounts` intermittently returns null for
+    // accounts that DO exist (RPC node inconsistency/lag), which previously
+    // false-pruned live positions → they escaped stop-loss/OOR and bled out.
+    // Only conclude "gone" when the retry ALSO finds nothing; on an RPC error
+    // treat all as present so a flaky call never prunes a real position.
+    let missing: Vec<(String, Pubkey)> = parsed
+        .iter()
+        .filter(|(id, _)| !existing.contains(id))
+        .cloned()
+        .collect();
+    if !missing.is_empty() {
+        let pubkeys: Vec<Pubkey> = missing.iter().map(|(_, pk)| *pk).collect();
+        match rpc.get_multiple_accounts(&pubkeys).await {
+            Ok(accounts) => {
+                for ((id, _), account) in missing.iter().zip(accounts.into_iter()) {
+                    if account.map(|a| a.lamports > 0).unwrap_or(false) {
+                        existing.insert(id.clone()); // exists — first call was wrong
+                    }
+                    // None on retry too → genuinely gone; leave unmarked (prunable).
+                }
+            }
+            Err(_) => {
+                // RPC error on retry → ambiguous → keep all (never false-prune).
+                for (id, _) in &missing {
+                    existing.insert(id.clone());
+                }
+            }
+        }
+    }
+
     Ok(existing)
 }
 
@@ -773,6 +992,11 @@ pub async fn close_position(
             None
         }
     };
+
+    // The close sends removed principal + fees to the wallet's token_x/token_y
+    // ATAs. Recreate any that were closed by the periodic wSOL sweep, else the
+    // one-shot fails with AccountNotInitialized on the missing account.
+    ensure_position_atas(&rpc_ctx.client, &keypair, &position).await;
 
     let params = ClosePositionParams {
         position_address: position,

@@ -353,6 +353,9 @@ async fn rpc_call(
 
 const USDC_MINT: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const SPL_TOKEN_PROGRAM: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+/// Token-2022 program. Most pump.fun / launch tokens the bot LPs are minted here,
+/// NOT the classic SPL program — enumerate both or they're invisible.
+const TOKEN_2022_PROGRAM: &str = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
 
 /// Get wallet balances (SOL + SPL tokens) via Solana RPC.
 ///
@@ -395,26 +398,41 @@ pub async fn get_wallet_balances(
     // ── SPL token accounts ───────────────────────────────────────
     let mut tokens: Vec<TokenBalance> = vec![];
     let mut usdc_balance = 0.0;
-    let token_result = rpc_call(
-        &client,
-        rpc,
-        "getTokenAccountsByOwner",
-        serde_json::json!([
-            pubkey,
-            { "programId": SPL_TOKEN_PROGRAM },
-            { "encoding": "jsonParsed" }
-        ]),
-    )
-    .await;
-    if let Some(accounts) = token_result
-        .as_ref()
-        .and_then(|r| r.get("value"))
-        .and_then(serde_json::Value::as_array)
-    {
+    // Enumerate BOTH token programs — classic SPL and Token-2022. Most
+    // pump.fun/launch tokens the bot LPs are Token-2022; querying only the
+    // classic program left them invisible (balance undercount + dust-sweep blind).
+    for program in [SPL_TOKEN_PROGRAM, TOKEN_2022_PROGRAM] {
+        let token_result = rpc_call(
+            &client,
+            rpc,
+            "getTokenAccountsByOwner",
+            serde_json::json!([
+                pubkey,
+                { "programId": program },
+                { "encoding": "jsonParsed" }
+            ]),
+        )
+        .await;
+        let Some(accounts) = token_result
+            .as_ref()
+            .and_then(|r| r.get("value"))
+            .and_then(serde_json::Value::as_array)
+        else {
+            continue;
+        };
         for acc in accounts {
             let info = &acc["account"]["data"]["parsed"]["info"];
             let mint = info["mint"].as_str().unwrap_or("").to_string();
-            let amount = info["tokenAmount"]["uiAmount"].as_f64().unwrap_or(0.0);
+            // Some RPCs return uiAmount: null with the value only in
+            // uiAmountString — fall back so tokens aren't silently skipped.
+            let amount = info["tokenAmount"]["uiAmount"]
+                .as_f64()
+                .or_else(|| {
+                    info["tokenAmount"]["uiAmountString"]
+                        .as_str()
+                        .and_then(|s| s.parse::<f64>().ok())
+                })
+                .unwrap_or(0.0);
             if mint.is_empty() || amount <= 0.0 {
                 continue;
             }
@@ -817,6 +835,123 @@ pub async fn execute_swap(
         fee_bps_applied: None,
         error: None,
     })
+}
+
+/// Minimum seconds between dust sweeps — bounds cost and avoids hammering
+/// Jupiter with unroutable dust. Kept short so leftovers clear promptly; the
+/// management cadence (a few min) is the real pacing.
+const DUST_SWEEP_COOLDOWN_SECS: u64 = 60; // 1 min
+
+fn dust_sweep_gate() -> &'static std::sync::Mutex<Option<std::time::Instant>> {
+    static G: std::sync::OnceLock<std::sync::Mutex<Option<std::time::Instant>>> =
+        std::sync::OnceLock::new();
+    G.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// Best-effort dust sweep: swap any non-SOL SPL token left in the wallet
+/// (leftovers from closed/adopted positions that the single post-close swap
+/// snapshot missed) back to SOL. Skips SOL/wSOL and the base mints of
+/// still-open positions (`keep_mints`). Never errors the caller; unroutable
+/// dust is logged and left for a later sweep. Self-throttled to
+/// `DUST_SWEEP_COOLDOWN_SECS`. Returns the number of tokens swapped.
+///
+/// Respects dry-run via `swap_token` (no real tx in DRY_RUN).
+pub async fn sweep_dust_to_sol(
+    config: &Config,
+    keep_mints: &std::collections::HashSet<String>,
+) -> usize {
+    // Throttle: bail if we swept recently. Lock is dropped before any await.
+    {
+        let mut last = match dust_sweep_gate().lock() {
+            Ok(g) => g,
+            Err(_) => return 0,
+        };
+        if let Some(prev) = *last {
+            if prev.elapsed().as_secs() < DUST_SWEEP_COOLDOWN_SECS {
+                return 0;
+            }
+        }
+        *last = Some(std::time::Instant::now());
+    }
+
+    let wallet = std::env::var("MERIDIAN_WALLET")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| crate::tools::meteora_native::wallet_pubkey_from_env().ok())
+        .unwrap_or_default();
+    if wallet.is_empty() {
+        return 0;
+    }
+    let rpc = crate::tools::meteora_native::resolve_rpc_url(config);
+    let balances = match get_wallet_balances(&rpc, &wallet, "").await {
+        Ok(b) => b,
+        Err(e) => {
+            crate::utils::logger::module::warn("dust", &format!("balance read failed: {}", e));
+            return 0;
+        }
+    };
+    // Observability: how many non-SOL tokens the sweep actually sees.
+    let non_sol: Vec<&TokenBalance> = balances
+        .tokens
+        .iter()
+        .filter(|t| normalize_mint(&t.mint) != SOL_MINT && t.balance > 0.0)
+        .collect();
+    crate::utils::logger::module::info(
+        "dust",
+        &format!(
+            "sweep check — {} non-SOL token(s) in wallet",
+            non_sol.len()
+        ),
+    );
+
+    let mut swept = 0usize;
+
+    // Unwrap residual wSOL back to native SOL (NOT a Jupiter swap — just close
+    // the wSOL account). The per-close unwrap can fail transiently (race with a
+    // concurrent op → "invalid account data"); this is the safety-net retry so
+    // wrapped SOL principal never stays stranded.
+    let has_wsol = balances
+        .tokens
+        .iter()
+        .any(|t| normalize_mint(&t.mint) == SOL_MINT && t.balance > 0.0);
+    if has_wsol {
+        match crate::tools::meteora_native::unwrap_all_wsol(config).await {
+            Ok(Some(_)) => {
+                crate::utils::logger::module::info("dust", "unwrapped residual wSOL → native SOL");
+                swept += 1;
+            }
+            Ok(None) => {}
+            Err(e) => crate::utils::logger::module::warn(
+                "dust",
+                &format!("wSOL unwrap failed (will retry next sweep): {}", e),
+            ),
+        }
+    }
+    for t in &balances.tokens {
+        let mint = normalize_mint(&t.mint);
+        if mint == SOL_MINT || t.balance <= 0.0 {
+            continue;
+        }
+        if keep_mints.contains(&mint) || keep_mints.contains(&t.mint) {
+            continue; // base token of an open position — leave it
+        }
+        crate::utils::logger::module::info(
+            "dust",
+            &format!("sweeping {} {} → SOL", t.balance, t.symbol),
+        );
+        match swap_token(&t.mint, t.balance, 300, 100, config).await {
+            Ok(s) if s.success => swept += 1,
+            Ok(_) => crate::utils::logger::module::warn(
+                "dust",
+                &format!("{} not routable yet (dust) — will retry later", t.symbol),
+            ),
+            Err(e) => crate::utils::logger::module::warn(
+                "dust",
+                &format!("swap {} failed: {}", t.symbol, e),
+            ),
+        }
+    }
+    swept
 }
 
 #[cfg(test)]
