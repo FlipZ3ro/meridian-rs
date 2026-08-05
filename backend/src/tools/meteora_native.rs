@@ -533,8 +533,214 @@ pub async fn quote_position_state_commons(
 
 /// SPL Token program id.
 const SPL_TOKEN_PROGRAM_ID: &str = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+/// Phase 2 (commons migration): claim a position's fees through the OFFICIAL
+/// MeteoraAg `commons` crate, mirroring `cli/src/instructions/claim_fee.rs`.
+///
+/// Why this exists: the wp `claim_fee_one_shot` fails with AnchorError 3012
+/// (`AccountNotInitialized`) on `user_token_y` for some positions even though
+/// the wallet's canonical ATA for that mint demonstrably exists on-chain — wp
+/// resolves the token account internally and we cannot influence which address
+/// it passes. Building the instruction here makes the account set explicit:
+///
+///  * the fee recipient is `position.fee_owner` when set, else the payer —
+///    exactly the branch the official CLI takes;
+///  * the token programs come from `LbPair`'s own program flags (the values the
+///    on-chain program validates against), NOT from reading each mint's owner,
+///    which is what our ATA pre-create had been guessing at;
+///  * both ATAs are created idempotently up front, so the claim can never race
+///    a missing account.
+///
+/// Uses solana v2 types throughout to match `commons` (see the Phase 1 note on
+/// `quote_position_state_commons`).
+pub async fn claim_fees_commons(
+    position_address: &str,
+    config: &Config,
+) -> Result<NativeClaimResult> {
+    use anchor_lang::{InstructionData, ToAccountMetas};
+    use commons::dlmm::accounts::{LbPair as CLbPair, PositionV2};
+    use commons::extensions::lb_pair::LbPairExtension;
+    use commons::extensions::position::PositionExtension;
+    use solana_client::nonblocking::rpc_client::RpcClient as RpcClientV2;
+    use solana_sdk::instruction::Instruction as InstructionV2;
+    use solana_sdk::pubkey::Pubkey as PubkeyV2;
+    use solana_sdk::signature::{Keypair as KeypairV2, Signer as SignerV2};
+    use solana_sdk::transaction::Transaction as TransactionV2;
+
+    let secret = wallet_secret_from_env()?;
+    let keypair = keypair_v2_from_secret(&secret)?;
+    let payer = keypair.pubkey();
+    let position_pk =
+        PubkeyV2::from_str(position_address).map_err(|e| anyhow!("invalid position: {}", e))?;
+    let rpc = RpcClientV2::new(resolve_rpc_url(config));
+
+    let position_account = rpc.get_account(&position_pk).await?;
+    let position_state: PositionV2 = commons::pod_read_unaligned_skip_disc(&position_account.data)
+        .map_err(|e| anyhow!("decode PositionV2: {}", e))?;
+
+    let pair_account = rpc.get_account(&position_state.lb_pair).await?;
+    let lb_pair_state: CLbPair = commons::pod_read_unaligned_skip_disc(&pair_account.data)
+        .map_err(|e| anyhow!("decode LbPair: {}", e))?;
+
+    // Fees land in ATAs owned by fee_owner when the position sets one; the
+    // default (all-zero) pubkey means the payer receives them.
+    let fee_recipient = if position_state.fee_owner == PubkeyV2::default() {
+        payer
+    } else {
+        position_state.fee_owner
+    };
+
+    let [token_program_x, token_program_y] = lb_pair_state
+        .get_token_programs()
+        .map_err(|e| anyhow!("resolve token programs from lb_pair: {}", e))?;
+
+    let user_token_x = derive_ata_v2(&fee_recipient, &lb_pair_state.token_x_mint, &token_program_x);
+    let user_token_y = derive_ata_v2(&fee_recipient, &lb_pair_state.token_y_mint, &token_program_y);
+
+    // Create whichever destination ATAs are missing, in one transaction, before
+    // the claim. CreateIdempotent is a no-op when the account already exists.
+    let mut setup_ixs: Vec<InstructionV2> = Vec::new();
+    for (ata, mint, token_program) in [
+        (user_token_x, lb_pair_state.token_x_mint, token_program_x),
+        (user_token_y, lb_pair_state.token_y_mint, token_program_y),
+    ] {
+        if rpc.get_account(&ata).await.is_err() {
+            setup_ixs.push(create_ata_idempotent_ix_v2(
+                &payer,
+                &fee_recipient,
+                &mint,
+                &token_program,
+            ));
+        }
+    }
+    if !setup_ixs.is_empty() {
+        let blockhash = rpc.get_latest_blockhash().await?;
+        let tx =
+            TransactionV2::new_signed_with_payer(&setup_ixs, Some(&payer), &[&keypair], blockhash);
+        let sig = rpc.send_and_confirm_transaction(&tx).await?;
+        tracing::info!(signature = %sig, "commons claim: created missing fee ATA(s)");
+    }
+
+    let (event_authority, _) = commons::derive_event_authority_pda();
+    let main_accounts = commons::dlmm::client::accounts::ClaimFee2 {
+        lb_pair: position_state.lb_pair,
+        sender: payer,
+        position: position_pk,
+        reserve_x: lb_pair_state.reserve_x,
+        reserve_y: lb_pair_state.reserve_y,
+        token_program_x,
+        token_program_y,
+        token_x_mint: lb_pair_state.token_x_mint,
+        token_y_mint: lb_pair_state.token_y_mint,
+        user_token_x,
+        user_token_y,
+        event_authority,
+        program: commons::dlmm::ID,
+        memo_program: PubkeyV2::from_str(MEMO_PROGRAM_ID).expect("valid memo program id"),
+    }
+    .to_account_metas(None);
+
+    // A position can span more bins than one instruction's account list allows,
+    // so the official client walks it in chunks — mirror that.
+    let mut signatures: Vec<String> = Vec::new();
+    for (min_bin_id, max_bin_id) in commons::position_bin_range_chunks(
+        position_state.lower_bin_id,
+        position_state.upper_bin_id,
+    ) {
+        let data = commons::dlmm::client::args::ClaimFee2 {
+            min_bin_id,
+            max_bin_id,
+            remaining_accounts_info: commons::dlmm::types::RemainingAccountsInfo {
+                slices: vec![],
+            },
+        }
+        .data();
+        let bin_arrays = position_state
+            .get_bin_array_accounts_meta_coverage_by_chunk(min_bin_id, max_bin_id)
+            .map_err(|e| anyhow!("bin array coverage: {}", e))?;
+        let accounts = [main_accounts.to_vec(), bin_arrays].concat();
+        let ix = InstructionV2 {
+            program_id: commons::dlmm::ID,
+            accounts,
+            data,
+        };
+        let blockhash = rpc.get_latest_blockhash().await?;
+        let tx = TransactionV2::new_signed_with_payer(&[ix], Some(&payer), &[&keypair], blockhash);
+        let sig = rpc
+            .send_and_confirm_transaction(&tx)
+            .await
+            .map_err(|e| anyhow!("commons claim_fee tx failed: {}", e))?;
+        signatures.push(sig.to_string());
+    }
+
+    // Report what was harvested using the read-only commons quote taken before
+    // the claim would have zeroed it out — callers only use these for logging
+    // and fee accounting.
+    let quote = quote_position_state_commons(position_address, config)
+        .await
+        .unwrap_or_default();
+
+    Ok(NativeClaimResult {
+        signature: signatures.join(","),
+        claimable_fee_x: quote.fee_x,
+        claimable_fee_y: quote.fee_y,
+    })
+}
+
+/// solana **v2** keypair for `commons` call sites (the rest of this file signs
+/// with v3 types; the two stacks don't share a `Signer` impl).
+fn keypair_v2_from_secret(secret: &str) -> Result<solana_sdk::signature::Keypair> {
+    let v3 = keypair_from_secret(secret)?;
+    solana_sdk::signature::Keypair::try_from(v3.to_bytes().as_slice())
+        .map_err(|e| anyhow!("convert keypair to v2: {}", e))
+}
+
+/// v2 twin of [`derive_ata`] — same canonical ATA seeds.
+fn derive_ata_v2(
+    owner: &solana_sdk::pubkey::Pubkey,
+    mint: &solana_sdk::pubkey::Pubkey,
+    token_program: &solana_sdk::pubkey::Pubkey,
+) -> solana_sdk::pubkey::Pubkey {
+    let ata_program =
+        solana_sdk::pubkey::Pubkey::from_str(ATA_PROGRAM_ID).expect("valid ATA program id");
+    solana_sdk::pubkey::Pubkey::find_program_address(
+        &[owner.as_ref(), token_program.as_ref(), mint.as_ref()],
+        &ata_program,
+    )
+    .0
+}
+
+/// v2 twin of [`create_ata_idempotent_ix`].
+fn create_ata_idempotent_ix_v2(
+    payer: &solana_sdk::pubkey::Pubkey,
+    owner: &solana_sdk::pubkey::Pubkey,
+    mint: &solana_sdk::pubkey::Pubkey,
+    token_program: &solana_sdk::pubkey::Pubkey,
+) -> solana_sdk::instruction::Instruction {
+    use solana_sdk::instruction::{AccountMeta, Instruction};
+    use solana_sdk::pubkey::Pubkey as P;
+    let ata_program = P::from_str(ATA_PROGRAM_ID).expect("valid ATA program id");
+    let ata = derive_ata_v2(owner, mint, token_program);
+    Instruction {
+        program_id: ata_program,
+        accounts: vec![
+            AccountMeta::new(*payer, true),
+            AccountMeta::new(ata, false),
+            AccountMeta::new_readonly(*owner, false),
+            AccountMeta::new_readonly(*mint, false),
+            AccountMeta::new_readonly(
+                P::from_str("11111111111111111111111111111111").expect("valid system program id"),
+                false,
+            ),
+            AccountMeta::new_readonly(*token_program, false),
+        ],
+        data: vec![ATA_CREATE_IDEMPOTENT_IX],
+    }
+}
+
 /// Native mint (wrapped SOL).
 const WSOL_MINT: &str = "So11111111111111111111111111111111111111112";
+/// SPL Memo program (required account on ClaimFee2).
+const MEMO_PROGRAM_ID: &str = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr";
 /// SPL Token `CloseAccount` instruction discriminator.
 const SPL_TOKEN_CLOSE_ACCOUNT_IX: u8 = 9;
 /// Associated Token Account program id.

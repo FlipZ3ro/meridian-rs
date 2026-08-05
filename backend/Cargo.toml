@@ -34,6 +34,10 @@ wp-solana-rpc = "0.1.1"
 # Phase 0 build spike: official Meteora Rust building blocks (git). Declared only
 # to test dependency co-resolution + compilation alongside the current tree.
 commons = { git = "https://github.com/MeteoraAg/dlmm-sdk", rev = "fb02e51a" }
+# Needed to build instructions against the commons-generated dlmm program types
+# (InstructionData::data / ToAccountMetas::to_account_metas). Must match the
+# anchor version commons pulls (0.31) or the trait impls won't line up.
+anchor-lang = "0.31"
 
 # Web Framework
 axum = "0.7"
