@@ -29,11 +29,36 @@ const HELP: &str = "🤖 *Meridian control*\n\
 /close <pool|position> — close a position\n\
 /help — this message";
 
+/// Whether this instance should serve Telegram commands.
+///
+/// Telegram allows exactly ONE `getUpdates` long-poll per bot token: a second
+/// one is answered with 409 Conflict and the two then steal each other's
+/// updates, so neither answers reliably. `sendMessage` carries no such limit.
+/// Setting `MERIDIAN_TELEGRAM_COMMANDS=false` lets a second instance share the
+/// token and chat for notifications while leaving the commands to the first.
+fn commands_enabled() -> bool {
+    match std::env::var("MERIDIAN_TELEGRAM_COMMANDS") {
+        Ok(value) => !matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "false" | "0" | "no" | "off"
+        ),
+        Err(_) => true,
+    }
+}
+
 /// Spawned from `main`. Never returns; loops on getUpdates.
 pub async fn run(
     config: Config,
     state_path: String,
 ) {
+    if !commands_enabled() {
+        info(
+            "telegram",
+            "interactive control disabled (MERIDIAN_TELEGRAM_COMMANDS=false) — \
+             this instance still sends notifications, it just does not poll for commands",
+        );
+        return;
+    }
     let token = match config
         .api
         .telegram_bot_token
@@ -712,4 +737,30 @@ async fn portfolio_text(config: &Config, state_path: &str) -> String {
     format!(
         "💰 Total PnL: ${total:.2} ({pct:.2}%)\n  realized ${realized:.2} · unrealized ${unrealized:.2}\nFees ${fees:.2} · Win rate {win_rate:.1}% · {closed} closed"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The default must keep serving commands — only an explicit opt-out makes
+    /// an instance notification-only, so the live bot is never silenced by a
+    /// setting it does not know about.
+    #[test]
+    fn commands_stay_on_unless_explicitly_turned_off() {
+        let decide = |value: Option<&str>| match value {
+            Some(value) => !matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "false" | "0" | "no" | "off"
+            ),
+            None => true,
+        };
+
+        assert!(decide(None), "unset means serve commands");
+        assert!(decide(Some("true")));
+        assert!(decide(Some("anything else")));
+        for off in ["false", "0", "no", "off", " FALSE ", "Off"] {
+            assert!(!decide(Some(off)), "{off} should disable the poller");
+        }
+    }
 }
