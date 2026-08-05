@@ -671,6 +671,260 @@ pub async fn claim_fees_commons(
     })
 }
 
+/// Map our strategy name onto the commons `StrategyType`. Mirrors
+/// [`strategy_type_from_name`] (which returns the wp enum) — single-side SOL
+/// deposits are imbalanced, so the *ImBalanced variants are the correct ones.
+fn strategy_type_commons(strategy: &str) -> commons::dlmm::types::StrategyType {
+    use commons::dlmm::types::StrategyType as S;
+    match strategy.to_ascii_lowercase().replace('-', "_").as_str() {
+        "curve" | "curve_one_side" | "curve_balanced" | "curve_imbalanced" => S::CurveImBalanced,
+        "bid_ask" | "bidask" | "bid_ask_one_side" | "bid_ask_balanced" | "bid_ask_imbalanced" => {
+            S::BidAskImBalanced
+        }
+        _ => S::SpotImBalanced,
+    }
+}
+
+/// Outcome of a Phase 4 deploy attempt. In simulate mode nothing is sent and
+/// `signature` is absent — `logs`/`units_consumed` carry the validator's verdict.
+#[derive(Debug, Clone, Default)]
+pub struct CommonsDeployOutcome {
+    pub simulated: bool,
+    pub signature: Option<String>,
+    pub position_address: String,
+    pub error: Option<String>,
+    pub logs: Vec<String>,
+    pub units_consumed: Option<u64>,
+    pub active_id: i32,
+    pub min_bin_id: i32,
+    pub max_bin_id: i32,
+}
+
+/// Phase 4 (commons migration): open a single-side-SOL position through the
+/// OFFICIAL SDK. This is the money path, so it defaults to simulation.
+///
+/// wp hides the whole sequence behind `add_liquidity_one_shot`; assembled here
+/// it is: initialize any missing bin arrays → initialize the position account →
+/// create the token ATAs → wrap the deposit into wSOL → `AddLiquidityByStrategy2`.
+/// Owning these steps is what makes Token-2022 pools reachable — the token
+/// programs come from the pair's own flags rather than being assumed.
+///
+/// With `simulate_only` the transaction is built and run through
+/// `simulateTransaction`: the validator executes it and reports success or the
+/// exact failure, but nothing is broadcast and no funds move.
+pub async fn deploy_position_commons(
+    pool_address: &str,
+    amount_sol: f64,
+    bins_below: i64,
+    bins_above: i64,
+    strategy: &str,
+    config: &Config,
+    simulate_only: bool,
+) -> Result<CommonsDeployOutcome> {
+    use anchor_lang::{InstructionData, ToAccountMetas};
+    use commons::dlmm::accounts::LbPair as CLbPair;
+    use commons::dlmm::types::{
+        LiquidityParameterByStrategy, RemainingAccountsInfo, StrategyParameters as CStrategyParams,
+    };
+    use commons::extensions::lb_pair::LbPairExtension;
+    use solana_client::nonblocking::rpc_client::RpcClient as RpcClientV2;
+    use solana_sdk::compute_budget::ComputeBudgetInstruction;
+    use solana_sdk::instruction::Instruction as InstructionV2;
+    use solana_sdk::pubkey::Pubkey as PubkeyV2;
+    use solana_sdk::signature::{Keypair as KeypairV2, Signer as SignerV2};
+    use solana_sdk::transaction::Transaction as TransactionV2;
+
+    let keypair = keypair_v2_from_secret(&wallet_secret_from_env()?)?;
+    let payer = keypair.pubkey();
+    let lb_pair =
+        PubkeyV2::from_str(pool_address).map_err(|e| anyhow!("invalid pool address: {}", e))?;
+    let rpc = RpcClientV2::new(resolve_rpc_url(config));
+    let amount_y = sol_to_lamports(amount_sol)?;
+
+    let pair_account = rpc.get_account(&lb_pair).await?;
+    let lb_pair_state: CLbPair = commons::pod_read_unaligned_skip_disc(&pair_account.data)
+        .map_err(|e| anyhow!("decode LbPair: {}", e))?;
+
+    // Read the active bin from chain, never from the caller — a stale id is
+    // rejected as ExceededBinSlippageTolerance.
+    let active_id = lb_pair_state.active_id;
+    let (min_bin_id, max_bin_id, width) = bin_range(active_id, bins_below, bins_above)?;
+
+    let [token_x_program, token_y_program] = lb_pair_state
+        .get_token_programs()
+        .map_err(|e| anyhow!("resolve token programs: {}", e))?;
+    let user_token_x = derive_ata_v2(&payer, &lb_pair_state.token_x_mint, &token_x_program);
+    let user_token_y = derive_ata_v2(&payer, &lb_pair_state.token_y_mint, &token_y_program);
+
+    let (event_authority, _) = commons::derive_event_authority_pda();
+    let mut instructions: Vec<InstructionV2> =
+        vec![ComputeBudgetInstruction::set_compute_unit_limit(1_400_000)];
+
+    // ── Bin arrays covering the range must exist before liquidity lands ──
+    let lower_array_idx = commons::dlmm::accounts::BinArray::bin_id_to_bin_array_index(min_bin_id)
+        .map_err(|e| anyhow!("lower bin array index: {}", e))?;
+    let upper_array_idx = commons::dlmm::accounts::BinArray::bin_id_to_bin_array_index(max_bin_id)
+        .map_err(|e| anyhow!("upper bin array index: {}", e))?;
+    for idx in lower_array_idx..=upper_array_idx {
+        let (bin_array, _) = commons::derive_bin_array_pda(lb_pair, idx.into());
+        if rpc.get_account_data(&bin_array).await.is_err() {
+            instructions.push(InstructionV2 {
+                program_id: commons::dlmm::ID,
+                accounts: commons::dlmm::client::accounts::InitializeBinArray {
+                    bin_array,
+                    funder: payer,
+                    lb_pair,
+                    system_program: solana_sdk::system_program::ID,
+                }
+                .to_account_metas(None),
+                data: commons::dlmm::client::args::InitializeBinArray { index: idx.into() }.data(),
+            });
+        }
+    }
+
+    // ── The position account itself (fresh keypair, co-signs) ────────
+    let position_kp = KeypairV2::new();
+    let position = position_kp.pubkey();
+    instructions.push(InstructionV2 {
+        program_id: commons::dlmm::ID,
+        accounts: commons::dlmm::client::accounts::InitializePosition {
+            lb_pair,
+            payer,
+            position,
+            owner: payer,
+            rent: solana_sdk::sysvar::rent::ID,
+            system_program: solana_sdk::system_program::ID,
+            event_authority,
+            program: commons::dlmm::ID,
+        }
+        .to_account_metas(None),
+        data: commons::dlmm::client::args::InitializePosition {
+            lower_bin_id: min_bin_id,
+            width,
+        }
+        .data(),
+    });
+
+    // ── Deposit accounts, then wrap the SOL into the wSOL side ───────
+    for (ata, mint, token_program) in [
+        (user_token_x, lb_pair_state.token_x_mint, token_x_program),
+        (user_token_y, lb_pair_state.token_y_mint, token_y_program),
+    ] {
+        if rpc.get_account(&ata).await.is_err() {
+            instructions.push(create_ata_idempotent_ix_v2(
+                &payer,
+                &payer,
+                &mint,
+                &token_program,
+            ));
+        }
+    }
+    let wsol_mint = PubkeyV2::from_str(WSOL_MINT).expect("valid wSOL mint");
+    if lb_pair_state.token_y_mint == wsol_mint {
+        // Fund the wSOL account and refresh its recorded balance; without the
+        // SyncNative the token program still reports zero and the deposit fails.
+        instructions.push(solana_sdk::system_instruction::transfer(
+            &payer,
+            &user_token_y,
+            amount_y,
+        ));
+        instructions.push(InstructionV2 {
+            program_id: token_y_program,
+            accounts: vec![solana_sdk::instruction::AccountMeta::new(
+                user_token_y,
+                false,
+            )],
+            data: vec![SPL_TOKEN_SYNC_NATIVE_IX],
+        });
+    } else {
+        anyhow::bail!(
+            "deploy_position_commons currently supports SOL-quoted pools only (token_y must be wSOL)"
+        );
+    }
+
+    // ── The deposit itself ───────────────────────────────────────────
+    let (bitmap_pda, _) = commons::derive_bin_array_bitmap_extension(lb_pair);
+    let bin_array_bitmap_extension = Some(match rpc.get_account(&bitmap_pda).await {
+        Ok(_) => bitmap_pda,
+        Err(_) => commons::dlmm::ID,
+    });
+    let main_accounts = commons::dlmm::client::accounts::AddLiquidityByStrategy2 {
+        lb_pair,
+        position,
+        bin_array_bitmap_extension,
+        sender: payer,
+        event_authority,
+        program: commons::dlmm::ID,
+        reserve_x: lb_pair_state.reserve_x,
+        reserve_y: lb_pair_state.reserve_y,
+        token_x_mint: lb_pair_state.token_x_mint,
+        token_y_mint: lb_pair_state.token_y_mint,
+        user_token_x,
+        user_token_y,
+        token_x_program,
+        token_y_program,
+    }
+    .to_account_metas(None);
+    let bin_arrays: Vec<solana_sdk::instruction::AccountMeta> = (lower_array_idx..=upper_array_idx)
+        .map(|idx| {
+            let (pda, _) = commons::derive_bin_array_pda(lb_pair, idx.into());
+            solana_sdk::instruction::AccountMeta::new(pda, false)
+        })
+        .collect();
+    instructions.push(InstructionV2 {
+        program_id: commons::dlmm::ID,
+        accounts: [main_accounts.to_vec(), bin_arrays].concat(),
+        data: commons::dlmm::client::args::AddLiquidityByStrategy2 {
+            liquidity_parameter: LiquidityParameterByStrategy {
+                amount_x: 0,
+                amount_y,
+                active_id,
+                max_active_bin_slippage: 5,
+                strategy_parameters: CStrategyParams {
+                    min_bin_id,
+                    max_bin_id,
+                    strategy_type: strategy_type_commons(strategy),
+                    parameteres: [0u8; 64],
+                },
+            },
+            remaining_accounts_info: RemainingAccountsInfo { slices: vec![] },
+        }
+        .data(),
+    });
+
+    let blockhash = rpc.get_latest_blockhash().await?;
+    let tx = TransactionV2::new_signed_with_payer(
+        &instructions,
+        Some(&payer),
+        &[&keypair, &position_kp],
+        blockhash,
+    );
+
+    let mut outcome = CommonsDeployOutcome {
+        simulated: simulate_only,
+        position_address: position.to_string(),
+        active_id,
+        min_bin_id,
+        max_bin_id,
+        ..Default::default()
+    };
+
+    if simulate_only {
+        let sim = rpc.simulate_transaction(&tx).await?;
+        outcome.logs = sim.value.logs.unwrap_or_default();
+        outcome.units_consumed = sim.value.units_consumed;
+        outcome.error = sim.value.err.map(|e| format!("{:?}", e));
+        return Ok(outcome);
+    }
+
+    let sig = rpc
+        .send_and_confirm_transaction(&tx)
+        .await
+        .map_err(|e| anyhow!("commons deploy failed: {}", e))?;
+    outcome.signature = Some(sig.to_string());
+    Ok(outcome)
+}
+
 /// Phase 3 (commons migration): close a position through the OFFICIAL SDK —
 /// remove 100% of its liquidity, claim the fees, then close the account, each
 /// as its own transaction, mirroring `cli/src/instructions/{remove_liquidity,
@@ -1065,6 +1319,9 @@ const WSOL_MINT: &str = "So11111111111111111111111111111111111111112";
 const MEMO_PROGRAM_ID: &str = "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr";
 /// SPL Token `CloseAccount` instruction discriminator.
 const SPL_TOKEN_CLOSE_ACCOUNT_IX: u8 = 9;
+/// SPL Token `SyncNative` instruction discriminator — refreshes a wSOL account's
+/// recorded balance after raw lamports are transferred into it.
+const SPL_TOKEN_SYNC_NATIVE_IX: u8 = 17;
 /// Associated Token Account program id.
 const ATA_PROGRAM_ID: &str = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
 /// ATA program `CreateIdempotent` instruction discriminator.
