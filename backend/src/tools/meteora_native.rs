@@ -726,6 +726,7 @@ pub async fn deploy_position_commons(
     use commons::dlmm::types::{
         LiquidityParameterByStrategy, RemainingAccountsInfo, StrategyParameters as CStrategyParams,
     };
+    use commons::extensions::bin_array::BinArrayExtension;
     use commons::extensions::lb_pair::LbPairExtension;
     use solana_client::nonblocking::rpc_client::RpcClient as RpcClientV2;
     use solana_sdk::compute_budget::ComputeBudgetInstruction;
