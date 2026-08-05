@@ -1234,6 +1234,73 @@ pub async fn close_position(
         }
         Err(e) => {
             tracing::error!("native close_position failed: {}", e);
+
+            // wp cannot close a Token-2022 position: it fails with custom program
+            // error 0xbc4 (AnchorError 3012, AccountNotInitialized) on the user
+            // token account, exactly as its claim does. Left there the position
+            // stays open on-chain holding its principal, so retry through the
+            // commons path, which assembles remove_liquidity + claim + close with
+            // an explicit account set. Scoped to this one error, so it only runs
+            // where the existing path has already failed.
+            let msg = e.to_string();
+            if is_account_not_initialized(&msg) {
+                tracing::warn!(
+                    "wp close hit AccountNotInitialized — retrying via commons close path"
+                );
+                match crate::tools::meteora_native::close_position_commons(
+                    &position_address,
+                    config,
+                )
+                .await
+                {
+                    Ok(result) => {
+                        tracing::info!(
+                            signatures = %result.signature,
+                            "commons close succeeded after wp AccountNotInitialized"
+                        );
+                        return Ok(CloseResult {
+                            success: true,
+                            position: Some(position_address),
+                            pool: None,
+                            pool_name: None,
+                            claim_txs: None,
+                            close_txs: Some(
+                                result
+                                    .signature
+                                    .split(',')
+                                    .map(str::to_string)
+                                    .filter(|s| !s.is_empty())
+                                    .collect(),
+                            ),
+                            txs: None,
+                            pnl_usd: None,
+                            pnl_pct: None,
+                            base_mint: result.base_mint,
+                            error: None,
+                        });
+                    }
+                    Err(commons_err) => {
+                        tracing::error!("commons close fallback also failed: {}", commons_err);
+                        return Ok(CloseResult {
+                            success: false,
+                            position: Some(position_address),
+                            pool: None,
+                            pool_name: None,
+                            claim_txs: None,
+                            close_txs: None,
+                            txs: None,
+                            pnl_usd: None,
+                            pnl_pct: None,
+                            base_mint: None,
+                            error: Some(format!(
+                                "Native Meteora close failed: {}; commons fallback failed: {}",
+                                e, commons_err
+                            )),
+                        });
+                    }
+                }
+            }
+
             Ok(CloseResult {
                 success: false,
                 position: Some(position_address),

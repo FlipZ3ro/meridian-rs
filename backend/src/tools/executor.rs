@@ -2021,6 +2021,18 @@ impl ToolExecutor {
                 }
 
                 let close = close_position(position, reason, config).await?;
+                // A failed close comes back as Ok(CloseResult { success: false }),
+                // not Err, so `?` above lets it through. Reporting that as a
+                // successful tool call made the poller log "auto-closed" and stop
+                // retrying while the position was still open on-chain holding its
+                // principal. Surface it as an error so the exit is attempted again
+                // on the next poll.
+                if !close.success {
+                    anyhow::bail!(
+                        "close failed: {}",
+                        close.error.as_deref().unwrap_or("unknown error")
+                    );
+                }
                 let mut result = serde_json::to_value(&close)?;
                 enrich_close_result_with_position_metadata(&mut result, args, positions);
                 self.maybe_auto_swap_base_to_sol(&mut result, skip_swap, config)
