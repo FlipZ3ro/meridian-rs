@@ -8,7 +8,7 @@ use crate::llm::LlmClient;
 use crate::state::pool_memory::PoolMemoryStore;
 use crate::state::positions::{
     get_deterministic_close_rule, minutes_out_of_range, resolve_pending_peak_with_pnl,
-    resolve_pending_trailing_drop, update_trailing_state, CloseRule, PositionState,
+    resolve_pending_trailing_drop, update_trailing_state, CloseRule, ExitThresholds, PositionState,
 };
 use crate::tools::dlmm::get_my_positions;
 use crate::utils::logger::module::{info, warn};
@@ -239,14 +239,12 @@ pub async fn run_management_cycle(
     for snapshot in &pos_snapshots {
         if let Some(pnl) = snapshot.pnl_pct {
             if let Some(pos) = positions.positions.get_mut(&snapshot.id) {
-                update_trailing_state(
-                    pos,
-                    pnl,
-                    config.management.trailing_trigger_pct,
-                    config.management.trailing_drop_pct,
-                );
+                // Trailing arms and drops on the same PnL curve the ladder
+                // reads, so it needs the same per-position thresholds.
+                let t = ExitThresholds::for_position(pos, config);
+                update_trailing_state(pos, pnl, t.trailing_trigger_pct, t.trailing_drop_pct);
                 resolve_pending_peak_with_pnl(pos, pnl);
-                resolve_pending_trailing_drop(pos, pnl, config.management.trailing_drop_pct, 1.0);
+                resolve_pending_trailing_drop(pos, pnl, t.trailing_drop_pct, 1.0);
             }
         }
     }
@@ -531,14 +529,10 @@ pub async fn run_pnl_poll(
         // Update trailing state
         if let Some(pnl) = snapshot.pnl_pct {
             if let Some(pos) = positions.positions.get_mut(&snapshot.id) {
-                update_trailing_state(
-                    pos,
-                    pnl,
-                    config.management.trailing_trigger_pct,
-                    config.management.trailing_drop_pct,
-                );
+                let t = ExitThresholds::for_position(pos, config);
+                update_trailing_state(pos, pnl, t.trailing_trigger_pct, t.trailing_drop_pct);
                 resolve_pending_peak_with_pnl(pos, pnl);
-                resolve_pending_trailing_drop(pos, pnl, config.management.trailing_drop_pct, 1.0);
+                resolve_pending_trailing_drop(pos, pnl, t.trailing_drop_pct, 1.0);
 
                 // Check confirmed trailing exit
                 if let (Some(ref reason), Some(ref until)) = (
@@ -590,12 +584,19 @@ pub async fn run_pnl_poll(
             && !exits_needed.iter().any(|(addr, _)| addr == &snapshot.id)
         {
             if let Some(pnl) = snapshot.pnl_pct {
-                if pnl >= config.management.exit_min_profit_pct {
-                    let base_mint = positions
-                        .positions
-                        .get(&snapshot.id)
-                        .map(|p| p.base_mint.clone())
-                        .unwrap_or_default();
+                // Dual-side pays a swap in and another out, so its floor sits
+                // higher — banking below it banks a loss.
+                let (min_profit, base_mint) = positions
+                    .positions
+                    .get(&snapshot.id)
+                    .map(|p| {
+                        (
+                            ExitThresholds::for_position(p, config).exit_min_profit_pct,
+                            p.base_mint.clone(),
+                        )
+                    })
+                    .unwrap_or((config.management.exit_min_profit_pct, String::new()));
+                if pnl >= min_profit {
                     if !base_mint.is_empty() && base_mint != crate::tools::wallet::SOL_MINT {
                         if let Ok(sig) =
                             crate::tools::bollinger::exit_signals(config, &base_mint).await

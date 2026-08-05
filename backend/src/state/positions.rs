@@ -24,6 +24,10 @@ const TRAILING_EXIT_WINDOW_MS: i64 = 30_000;
 const OOR_CLOSE_LOSS_PCT: f64 = -4.0;
 /// … or after this many times the OOR wait, to free stuck capital regardless.
 const OOR_MAX_HOLD_MULT: u32 = 3;
+/// Bins above the range before a single-side position counts as pumped away
+/// from it. Generous because for single-side that state is an all-SOL winner
+/// with no IL — there is nothing to protect by leaving sooner.
+const PUMPED_ABOVE_BINS: i32 = 50;
 static STATE_SAVE_LOCK: Mutex<()> = Mutex::new(());
 
 // ─── Position Status ────────────────────────────────────────────
@@ -167,6 +171,83 @@ pub struct TrackedPosition {
     pub last_fee_claim_at: Option<String>,
     #[serde(default)]
     pub repeat_deploy_count: u32,
+    /// Whether this position was DEPLOYED dual-side. Recorded per position, not
+    /// read from config at exit time: the mode can be flipped while positions
+    /// are open, and a position's exit rules have to match the shape it was
+    /// actually opened with. Old records default to false, which is what they
+    /// were.
+    #[serde(default)]
+    pub dual_side: bool,
+}
+
+/// The exit thresholds in force for one position.
+///
+/// Every threshold in the ladder was calibrated against single-side PnL curves,
+/// where a position carries no base token until price trades down into its
+/// range. Dual-side holds the token from entry, so the same underlying move
+/// shows up in PnL roughly `threshold_mult` times larger and arrives sooner —
+/// the constants stop meaning what they meant. Resolving them per position
+/// keeps both modes running side by side without either retuning the other.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExitThresholds {
+    pub dual_side: bool,
+    pub stop_loss_pct: Option<f64>,
+    pub oor_close_loss_pct: f64,
+    pub oor_wait_minutes: u32,
+    pub safety_exit_trigger_pct: f64,
+    pub pumped_above_bins: i32,
+    pub trailing_trigger_pct: f64,
+    pub trailing_drop_pct: f64,
+    pub exit_min_profit_pct: f64,
+}
+
+impl ExitThresholds {
+    /// Single-side values, exactly as the ladder has always used them.
+    pub fn single_side(config: &Config) -> Self {
+        Self {
+            dual_side: false,
+            stop_loss_pct: config.risk.stop_loss_pct,
+            oor_close_loss_pct: OOR_CLOSE_LOSS_PCT,
+            oor_wait_minutes: config.management.out_of_range_wait_minutes,
+            safety_exit_trigger_pct: config.risk.safety_exit_trigger_pct,
+            pumped_above_bins: PUMPED_ABOVE_BINS,
+            trailing_trigger_pct: config.management.trailing_trigger_pct,
+            trailing_drop_pct: config.management.trailing_drop_pct,
+            exit_min_profit_pct: config.management.exit_min_profit_pct,
+        }
+    }
+
+    /// Single-side values with the price-reactive ones widened by
+    /// `dualSideThresholdMult`, plus the two that differ in kind rather than in
+    /// size: the pumped-above buffer and the minimum profit to bank.
+    ///
+    /// The OOR wait is deliberately NOT scaled. It measures how long price has
+    /// been outside the range, which is the same clock in both modes — only the
+    /// loss that accrues over it differs, and that is what the multiplier
+    /// covers.
+    pub fn dual_side(config: &Config) -> Self {
+        let mult = config.dual_side.threshold_mult.max(1.0);
+        let single = Self::single_side(config);
+        Self {
+            dual_side: true,
+            stop_loss_pct: single.stop_loss_pct.map(|pct| pct * mult),
+            oor_close_loss_pct: single.oor_close_loss_pct * mult,
+            safety_exit_trigger_pct: single.safety_exit_trigger_pct * mult,
+            pumped_above_bins: config.dual_side.pumped_above_bins,
+            trailing_trigger_pct: single.trailing_trigger_pct * mult,
+            trailing_drop_pct: single.trailing_drop_pct * mult,
+            exit_min_profit_pct: config.dual_side.exit_min_profit_pct,
+            ..single
+        }
+    }
+
+    pub fn for_position(pos: &TrackedPosition, config: &Config) -> Self {
+        if pos.dual_side {
+            Self::dual_side(config)
+        } else {
+            Self::single_side(config)
+        }
+    }
 }
 
 impl Default for TrackedPosition {
@@ -211,6 +292,7 @@ impl Default for TrackedPosition {
             last_managed_at: None,
             last_fee_claim_at: None,
             repeat_deploy_count: 0,
+            dual_side: false,
         }
     }
 }
@@ -759,12 +841,14 @@ pub fn get_deterministic_close_rule(
         }
     }
 
+    let thresholds = ExitThresholds::for_position(pos, config);
+
     // ── Rule 1: Stop Loss (downside cap — runs BEFORE the min-duration gate) ─
     // A fast dump must be cut even on a brand-new position. The biggest losses
     // (e.g. -10%) came from tokens that crashed within the first few minutes
     // while the gate below suppressed every exit. Require ~1 min of age so a
     // transient just-deployed valuation glitch can't false-trigger.
-    if let Some(sl_pct) = config.risk.stop_loss_pct {
+    if let Some(sl_pct) = thresholds.stop_loss_pct {
         if pnl_pct <= sl_pct && position_age_minutes(pos) >= 1 {
             return Some(CloseRule::StopLoss);
         }
@@ -792,7 +876,7 @@ pub fn get_deterministic_close_rule(
     // full TP that usually never comes. Conservative; fits the spot strategy.
     if config.risk.safety_exit_enabled {
         let max_dd = pos.trailing.max_drawdown_pct.unwrap_or(0.0);
-        if max_dd <= config.risk.safety_exit_trigger_pct
+        if max_dd <= thresholds.safety_exit_trigger_pct
             && pnl_pct >= config.risk.safety_exit_tp_pct
         {
             return Some(CloseRule::SafetyExit);
@@ -800,7 +884,11 @@ pub fn get_deterministic_close_rule(
     }
 
     // ── Rule 3: Pumped Above Range ───────────────────────────────
-    if active_bin > pos.upper_bin + 50 {
+    // For single-side this is the free winner: price ran past the range, the
+    // deposit came out as SOL, no IL. For dual-side it means the position sold
+    // its entire token side into the rally and now holds SOL that earns nothing
+    // while out of range — so it leaves on a tighter buffer.
+    if active_bin > pos.upper_bin + thresholds.pumped_above_bins {
         return Some(CloseRule::PumpedAboveRange);
     }
 
@@ -816,17 +904,25 @@ pub fn get_deterministic_close_rule(
     // close only when it's a real loss (recovery unlikely) or it's been dead far
     // too long (free the capital). Stop-loss still cuts hard losers, and
     // PumpedAboveRange (above) handles the no-IL OOR-above case.
-    if minutes_out_of_range >= config.management.out_of_range_wait_minutes {
-        let dead_too_long = minutes_out_of_range
-            >= config.management.out_of_range_wait_minutes * OOR_MAX_HOLD_MULT;
+    //
+    // The bounce argument survives dual-side — the token still converts back on
+    // the way up — but a dual-side position was already holding that token on
+    // the way down, so it arrives here further under water for the same move.
+    // Only the loss threshold widens; the clock is the same clock.
+    if minutes_out_of_range >= thresholds.oor_wait_minutes {
+        let dead_too_long = minutes_out_of_range >= thresholds.oor_wait_minutes * OOR_MAX_HOLD_MULT;
         // Out of range AND meaningfully in profit means price ran up through
         // the range and out the top: the base token was sold back into SOL on
         // the way, so the position is all SOL, sitting above its bins, earning
         // nothing. Waiting out the full dead-hold only pays if price falls back
         // into range — which would re-buy the token and give the gain back.
         // Bank it at the normal wait mark and put the capital to work instead.
-        let banked_above_range = pnl_pct >= config.management.exit_min_profit_pct;
-        if pnl_pct <= OOR_CLOSE_LOSS_PCT || banked_above_range || dead_too_long {
+        //
+        // Dual-side reaches this the same way, but its floor is higher: it paid
+        // a swap going in and pays another coming out, so "in profit" has to
+        // clear more before banking is worth it.
+        let banked_above_range = pnl_pct >= thresholds.exit_min_profit_pct;
+        if pnl_pct <= thresholds.oor_close_loss_pct || banked_above_range || dead_too_long {
             return Some(CloseRule::OutOfRange);
         }
         // else: OOR near breakeven — could be either side of the range, so hold
@@ -1139,6 +1235,90 @@ fn iso_to_epoch_ms(ts: &str) -> i64 {
 mod tests {
     use super::*;
     use crate::config::types::{ManagementConfig, RiskConfig};
+
+    /// The multiplier only touches what reacts to price. Everything else about
+    /// a dual-side position's exit — how long it may sit out of range, where
+    /// breakeven is — is the same decision it always was.
+    #[test]
+    fn dual_side_widens_only_the_price_reactive_thresholds() {
+        let config = test_config();
+        let single = ExitThresholds::single_side(&config);
+        let dual = ExitThresholds::dual_side(&config);
+        let mult = config.dual_side.threshold_mult;
+        assert_eq!(mult, 2.0, "test assumes the shipped default");
+
+        assert_eq!(dual.stop_loss_pct, single.stop_loss_pct.map(|p| p * mult));
+        assert_eq!(dual.oor_close_loss_pct, single.oor_close_loss_pct * mult);
+        assert_eq!(
+            dual.safety_exit_trigger_pct,
+            single.safety_exit_trigger_pct * mult
+        );
+        assert_eq!(dual.trailing_trigger_pct, single.trailing_trigger_pct * mult);
+        assert_eq!(dual.trailing_drop_pct, single.trailing_drop_pct * mult);
+
+        // Same clock out of range, tighter pumped-above buffer, higher floor.
+        assert_eq!(dual.oor_wait_minutes, single.oor_wait_minutes);
+        assert!(dual.pumped_above_bins < single.pumped_above_bins);
+        assert!(dual.exit_min_profit_pct > single.exit_min_profit_pct);
+    }
+
+    /// The mode is a property of the position, not of the config at exit time —
+    /// flipping the switch must not retune positions already in flight.
+    #[test]
+    fn thresholds_follow_the_position_not_the_current_config() {
+        let mut config = test_config();
+        config.dual_side.enabled = true;
+
+        let single_pos = TrackedPosition::default();
+        let dual_pos = TrackedPosition {
+            dual_side: true,
+            ..TrackedPosition::default()
+        };
+
+        assert_eq!(
+            ExitThresholds::for_position(&single_pos, &config),
+            ExitThresholds::single_side(&config),
+            "a position opened single-side keeps the single-side ladder"
+        );
+        assert_eq!(
+            ExitThresholds::for_position(&dual_pos, &config),
+            ExitThresholds::dual_side(&config)
+        );
+    }
+
+    /// A dual-side position must survive the drop that a single-side one is cut
+    /// on, or the two modes cannot be compared over the same tokens.
+    #[test]
+    fn the_same_drop_stops_out_single_side_but_not_dual_side() {
+        let config = test_config();
+        let sl = config.risk.stop_loss_pct.expect("test config sets a stop");
+        let drop = sl - 0.1;
+
+        let mut single = TrackedPosition {
+            created_at: (Utc::now() - chrono::Duration::minutes(30)).to_rfc3339(),
+            ..TrackedPosition::default()
+        };
+        single.amount_sol = 0.5;
+        let dual = TrackedPosition {
+            dual_side: true,
+            ..single.clone()
+        };
+
+        assert_eq!(
+            get_deterministic_close_rule(&single, 0, drop, 0.01, 0, &config),
+            Some(CloseRule::StopLoss)
+        );
+        assert_eq!(
+            get_deterministic_close_rule(&dual, 0, drop, 0.01, 0, &config),
+            None,
+            "dual-side rides out a move that is ordinary volatility for it"
+        );
+        // It still has a floor, just a wider one.
+        assert_eq!(
+            get_deterministic_close_rule(&dual, 0, sl * 2.0 - 0.1, 0.01, 0, &config),
+            Some(CloseRule::StopLoss)
+        );
+    }
 
     fn test_config() -> Config {
         Config {

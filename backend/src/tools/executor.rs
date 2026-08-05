@@ -1883,6 +1883,7 @@ impl ToolExecutor {
                                         base_symbol,
                                         strategy: strategy.map(str::to_string),
                                         amount_x: result.amount_x.unwrap_or(0.0),
+                                        dual_side: result.dual_side.unwrap_or(false),
                                         active_bin_at_deploy: result
                                             .bin_range
                                             .as_ref()
@@ -1986,6 +1987,7 @@ impl ToolExecutor {
                                 base_symbol,
                                 strategy: strategy.map(str::to_string),
                                 amount_x: result.amount_x.unwrap_or(0.0),
+                                dual_side: result.dual_side.unwrap_or(false),
                                 active_bin_at_deploy: result
                                     .bin_range
                                     .as_ref()

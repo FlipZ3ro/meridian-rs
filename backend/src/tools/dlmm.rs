@@ -298,6 +298,11 @@ pub struct DeployResult {
     pub strategy: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wide_range: Option<bool>,
+    /// Whether this deploy put the base token in alongside the SOL. Carried
+    /// through to the tracked position so its exit rules match how it was
+    /// actually opened.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dual_side: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub amount_x: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -932,12 +937,12 @@ pub async fn deploy_position(
 ) -> Result<DeployResult> {
     let pool_address = crate::tools::wallet::normalize_mint(pool_address);
 
-    let dual_side = config.management.dual_side_enabled;
+    let dual_side = config.dual_side.enabled;
     // Single-side deliberately has no upside half — it deposits SOL below the
     // active bin and waits for price to come down. Dual-side sits around the
     // active bin and needs bins on both sides for the base token to occupy.
     let bins_above_val = bins_above.unwrap_or(if dual_side {
-        config.management.dual_side_bins_above
+        config.dual_side.bins_above
     } else {
         0
     });
@@ -996,7 +1001,7 @@ pub async fn deploy_position(
     // clears the native path's 69-bin ceiling as soon as an upside half is added.
     let bins_below_val = bins_below.unwrap_or_else(|| {
         if dual_side {
-            config.management.dual_side_bins_below
+            config.dual_side.bins_below
         } else {
             coverage_based_bins_below(bin_step, &config.strategy)
         }
@@ -1008,7 +1013,7 @@ pub async fn deploy_position(
     // only the remainder goes in as SOL. The token units it buys aren't known
     // until the swap fills, which is why amount_x stays unreported here.
     let sol_for_base = if dual_side {
-        amount_sol * config.management.dual_side_base_pct
+        amount_sol * config.dual_side.base_pct
     } else {
         0.0
     };
@@ -1085,6 +1090,7 @@ pub async fn deploy_position(
             base_fee,
             strategy: Some(strategy_str.to_string()),
             wide_range: Some(is_wide_range),
+            dual_side: Some(dual_side),
             amount_x: deposit_amount_x,
             amount_y: Some(sol_side),
             txs: None,
@@ -1127,6 +1133,7 @@ pub async fn deploy_position(
             base_fee,
             strategy: Some(strategy_str.to_string()),
             wide_range: Some(true),
+            dual_side: Some(dual_side),
             amount_x: deposit_amount_x,
             amount_y: Some(sol_side),
             txs: None,
@@ -1170,6 +1177,7 @@ pub async fn deploy_position(
                 base_fee,
                 strategy: Some(strategy_str.to_string()),
                 wide_range: Some(is_wide_range),
+                dual_side: Some(dual_side),
                 amount_x: deposit_amount_x,
                 amount_y: Some(sol_side),
                 txs: Some(vec![result.signature]),
@@ -1197,6 +1205,7 @@ pub async fn deploy_position(
                 base_fee,
                 strategy: Some(strategy_str.to_string()),
                 wide_range: Some(is_wide_range),
+                dual_side: Some(dual_side),
                 amount_x: deposit_amount_x,
                 amount_y: Some(sol_side),
                 txs: None,

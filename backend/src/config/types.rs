@@ -15,6 +15,8 @@ pub struct Config {
     #[serde(default)]
     pub dual_strategy: DualStrategyConfig,
     #[serde(default)]
+    pub dual_side: DualSideConfig,
+    #[serde(default)]
     pub tokens: TokensConfig,
     #[serde(default)]
     pub api: ApiConfig,
@@ -244,44 +246,9 @@ pub struct ManagementConfig {
     // stuck. Set false once the commons migration handles Token-2022.
     #[serde(default = "default_skip_token_2022")]
     pub skip_token_2022: bool,
-    // ── Dual-side deposits ───────────────────────────────────
-    // Single-side puts only SOL in bins BELOW the active one, so fees accrue
-    // only once price trades down into the range. Dual-side buys the base token
-    // first and sits around the active bin, earning from tick one — paying for
-    // it with directional exposure and IL from entry, plus the entry swap's
-    // slippage. Off by default: the live single-side baseline depends on it.
-    #[serde(default)]
-    pub dual_side_enabled: bool,
-    // Fraction of the deploy swapped SOL → base token. 0.5 is the balanced
-    // split; lower tilts the position back toward SOL.
-    #[serde(default = "default_dual_side_base_pct")]
-    pub dual_side_base_pct: f64,
-    #[serde(default = "default_dual_side_slippage_bps")]
-    pub dual_side_slippage_bps: u32,
-    // Dual-side needs bins on BOTH sides of the active bin — the token side
-    // has nowhere to sit otherwise. Sized here rather than reusing the
-    // single-side coverage math, whose downside-only range blows past the
-    // native path's 69-bin ceiling as soon as an upside half is added.
-    #[serde(default = "default_dual_side_bins_below")]
-    pub dual_side_bins_below: i64,
-    #[serde(default = "default_dual_side_bins_above")]
-    pub dual_side_bins_above: i64,
     // ── Display mode ─────────────────────────────────────────
     #[serde(default)]
     pub sol_mode: bool,
-}
-
-fn default_dual_side_base_pct() -> f64 {
-    0.5
-}
-fn default_dual_side_slippage_bps() -> u32 {
-    100
-}
-fn default_dual_side_bins_below() -> i64 {
-    30
-}
-fn default_dual_side_bins_above() -> i64 {
-    30
 }
 
 fn default_skip_token_2022() -> bool {
@@ -483,6 +450,98 @@ impl Default for DualStrategyConfig {
             primary_pct: 0.6,
             safeguard_oor_wait_min: 60,
             aggressive_oor_wait_min: 15,
+        }
+    }
+}
+
+/// Dual-side LP: deposit BOTH sides of the pair around the active bin instead
+/// of only SOL below it, so the position earns from tick one. Unrelated to
+/// [`DualStrategyConfig`] above, which splits positions between a safeguard and
+/// an aggressive profile.
+///
+/// The cost is directional exposure and IL from entry plus the entry swap's
+/// slippage, and it changes what the exit ladder means — hence the threshold
+/// overrides below. Off by default: the live single-side baseline depends on it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DualSideConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Fraction of the deploy swapped SOL → base token. 0.5 is the balanced
+    /// split; lower tilts the position back toward SOL.
+    #[serde(default = "default_dual_side_base_pct")]
+    pub base_pct: f64,
+    #[serde(default = "default_dual_side_slippage_bps")]
+    pub slippage_bps: u32,
+    /// Dual-side needs bins on BOTH sides of the active bin — the token side
+    /// has nowhere to sit otherwise. Sized here rather than reusing the
+    /// single-side coverage math, whose downside-only range blows past the
+    /// native path's 69-bin ceiling as soon as an upside half is added.
+    #[serde(default = "default_dual_side_bins_below")]
+    pub bins_below: i64,
+    #[serde(default = "default_dual_side_bins_above")]
+    pub bins_above: i64,
+
+    // ── Exit ladder overrides ────────────────────────────────
+    /// How much wider dual-side runs the thresholds that react to price moves:
+    /// stop loss, OOR close loss, safety-exit trigger, trailing arm and drop.
+    ///
+    /// A single multiplier rather than a second set of numbers, because the
+    /// numbers are not independently known. At `basePct` 0.5 the position holds
+    /// the token from entry, so early in its life PnL moves about twice as far
+    /// per unit of token move as a single-side position's does — that ratio is
+    /// what 2.0 encodes. Scaling the single-side ladder also keeps both modes in
+    /// step when the baseline is retuned, which a fixed second set would not.
+    ///
+    /// It is a starting hypothesis. Measure before trusting it.
+    #[serde(default = "default_dual_side_threshold_mult")]
+    pub threshold_mult: f64,
+    /// Bins above the range before "pumped far above" fires. Tighter than the
+    /// single-side 50: out of range above means the position sold its whole
+    /// token side into the rally and now sits in SOL earning nothing, where for
+    /// single-side it meant an all-SOL winner that never took on IL at all.
+    #[serde(default = "default_dual_side_pumped_above_bins")]
+    pub pumped_above_bins: i32,
+    /// Minimum profit before the over-extension take-profit may fire. Higher
+    /// than single-side's because dual-side pays a swap on the way in and
+    /// another on the way out; banking below that is banking a loss.
+    #[serde(default = "default_dual_side_exit_min_profit_pct")]
+    pub exit_min_profit_pct: f64,
+}
+
+fn default_dual_side_base_pct() -> f64 {
+    0.5
+}
+fn default_dual_side_slippage_bps() -> u32 {
+    100
+}
+fn default_dual_side_bins_below() -> i64 {
+    30
+}
+fn default_dual_side_bins_above() -> i64 {
+    30
+}
+fn default_dual_side_threshold_mult() -> f64 {
+    2.0
+}
+fn default_dual_side_pumped_above_bins() -> i32 {
+    10
+}
+fn default_dual_side_exit_min_profit_pct() -> f64 {
+    4.0
+}
+
+impl Default for DualSideConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            base_pct: default_dual_side_base_pct(),
+            slippage_bps: default_dual_side_slippage_bps(),
+            bins_below: default_dual_side_bins_below(),
+            bins_above: default_dual_side_bins_above(),
+            threshold_mult: default_dual_side_threshold_mult(),
+            pumped_above_bins: default_dual_side_pumped_above_bins(),
+            exit_min_profit_pct: default_dual_side_exit_min_profit_pct(),
         }
     }
 }
@@ -804,11 +863,6 @@ impl Default for Config {
                 exit_bb_upper_pctb: default_exit_bb_upper_pctb(),
                 exit_min_profit_pct: 0.0,
                 skip_token_2022: default_skip_token_2022(),
-                dual_side_enabled: false,
-                dual_side_base_pct: default_dual_side_base_pct(),
-                dual_side_slippage_bps: default_dual_side_slippage_bps(),
-                dual_side_bins_below: default_dual_side_bins_below(),
-                dual_side_bins_above: default_dual_side_bins_above(),
                 sol_mode: false,
             },
             risk: RiskConfig {
@@ -846,6 +900,7 @@ impl Default for Config {
                 target_downside_pct: default_target_downside_pct(),
             },
             dual_strategy: DualStrategyConfig::default(),
+            dual_side: DualSideConfig::default(),
             tokens: TokensConfig::default(),
             api: ApiConfig::default(),
             jupiter: JupiterConfig::default(),

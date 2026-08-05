@@ -278,6 +278,31 @@ fn config_from_flat_js_value(value: &Value) -> Config {
     );
     set_bool(obj, "solMode", &mut config.management.sol_mode);
 
+    set_bool(obj, "dualSideEnabled", &mut config.dual_side.enabled);
+    set_f64(obj, "dualSideBasePct", &mut config.dual_side.base_pct);
+    set_u32(
+        obj,
+        "dualSideSlippageBps",
+        &mut config.dual_side.slippage_bps,
+    );
+    set_i64(obj, "dualSideBinsBelow", &mut config.dual_side.bins_below);
+    set_i64(obj, "dualSideBinsAbove", &mut config.dual_side.bins_above);
+    set_f64(
+        obj,
+        "dualSideThresholdMult",
+        &mut config.dual_side.threshold_mult,
+    );
+    set_i32(
+        obj,
+        "dualSidePumpedAboveBins",
+        &mut config.dual_side.pumped_above_bins,
+    );
+    set_f64(
+        obj,
+        "dualSideExitMinProfitPct",
+        &mut config.dual_side.exit_min_profit_pct,
+    );
+
     set_f64(obj, "maxDeployAmount", &mut config.risk.max_deploy_amount);
     set_u32(obj, "maxPositions", &mut config.risk.max_positions);
     set_opt_f64(obj, "stopLossPct", &mut config.risk.stop_loss_pct);
@@ -604,6 +629,12 @@ fn set_i32(obj: &Map<String, Value>, key: &str, target: &mut i32) {
         .and_then(number_as_i64)
         .and_then(|v| i32::try_from(v).ok())
     {
+        *target = value;
+    }
+}
+
+fn set_i64(obj: &Map<String, Value>, key: &str, target: &mut i64) {
+    if let Some(value) = obj.get(key).and_then(number_as_i64) {
         *target = value;
     }
 }

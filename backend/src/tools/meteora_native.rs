@@ -463,14 +463,14 @@ pub async fn deploy_position(
     strategy: &str,
     config: &Config,
 ) -> Result<NativeDeployResult> {
-    let dual_side = config.management.dual_side_enabled;
+    let dual_side = config.dual_side.enabled;
     // A balanced deposit needs bins on both sides of the active one: with
     // max_bin_id == active_id the base token has a single bin to sit in and
     // almost all of it stays in the wallet. Refuse rather than deposit lopsided.
     if dual_side && bins_above <= 0 {
         anyhow::bail!(
             "dual-side deploy needs bins above the active bin (got bins_above={}); \
-             set management.dualSideBinsAbove",
+             set dualSideBinsAbove",
             bins_above
         );
     }
@@ -549,8 +549,8 @@ pub async fn deploy_position(
         let entry = acquire_base_token(
             &base_mint,
             amount_sol,
-            config.management.dual_side_base_pct,
-            config.management.dual_side_slippage_bps,
+            config.dual_side.base_pct,
+            config.dual_side.slippage_bps,
             config,
             true,
         )
@@ -1024,7 +1024,7 @@ pub async fn deploy_position_commons(
     if dual_side && bins_above <= 0 {
         anyhow::bail!(
             "dual-side deploy needs bins above the active bin (got bins_above={}); \
-             pass --bins-above or set management.dualSideBinsAbove",
+             pass --bins-above or set dualSideBinsAbove",
             bins_above
         );
     }
@@ -1037,8 +1037,8 @@ pub async fn deploy_position_commons(
             acquire_base_token(
                 &base_mint,
                 amount_sol,
-                config.management.dual_side_base_pct,
-                config.management.dual_side_slippage_bps,
+                config.dual_side.base_pct,
+                config.dual_side.slippage_bps,
                 config,
                 !simulate_only,
             )

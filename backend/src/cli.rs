@@ -1541,15 +1541,15 @@ pub async fn run_cli_command(
         } => {
             // `--dual-side` forces it on for a one-off run; otherwise the
             // configured mode applies, so the CLI rehearses what the bot does.
-            let dual_side = dual_side || config.management.dual_side_enabled;
+            let dual_side = dual_side || config.dual_side.enabled;
             // Dual-side needs an upside half; single-side deliberately has none.
             let default_bins_above = if dual_side {
-                config.management.dual_side_bins_above
+                config.dual_side.bins_above
             } else {
                 0
             };
             let default_bins_below = if dual_side {
-                config.management.dual_side_bins_below
+                config.dual_side.bins_below
             } else {
                 20
             };
