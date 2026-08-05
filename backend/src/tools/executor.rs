@@ -1025,27 +1025,46 @@ impl ToolExecutor {
                 // screener re-entered the same dumping token minutes later: CATE
                 // stopped out twice inside 40 minutes, 2m50s apart, with zero fees.
                 //
+                // The pnl-based arm uses `risk.cooldownLossPct` (default -5%) as
+                // the materiality threshold. `pnl_sol < 0` would lock a pool for a
+                // whole hour over a -0.2% breakeven exit — noise, not a verdict on
+                // the pool — and with the candidate funnel as narrow as it is that
+                // starves the screener of the few workable pools it has. (This arm
+                // was dormant until PnL persistence landed, which is why the dead
+                // config went unnoticed; `cooldownDurationMin` was hardcoded too.)
+                //
                 // Uses find_tracked_position so a close addressed by
                 // position_address (pid empty) is covered too — that silently
                 // skipped the cooldown before.
                 if let Some(pos) = find_tracked_position(args, positions) {
                     let reason = args["reason"].as_str().unwrap_or("");
                     let risk_cut = is_risk_cut_reason(reason);
-                    let known_loss = pos.pnl_sol.is_some_and(|pnl| pnl < 0.0);
-                    if risk_cut || known_loss {
+                    let loss_threshold = config.risk.cooldown_loss_pct;
+                    let material_loss = pos.pnl_pct.is_some_and(|pct| pct <= loss_threshold);
+                    if risk_cut || material_loss {
                         let pool_address = pos.pool_address.clone();
                         let base_mint = pos.base_mint.clone();
-                        let detail = match pos.pnl_sol {
-                            Some(pnl) => format!("{:.4} SOL loss", pnl),
-                            None => format!("risk-cut close ({}), pnl unknown", reason),
+                        let minutes = config.risk.cooldown_duration_min;
+                        let detail = match (pos.pnl_pct, pos.pnl_sol) {
+                            (Some(pct), Some(sol)) => {
+                                format!("{:.2}% ({:.4} SOL) loss", pct, sol)
+                            }
+                            (Some(pct), None) => format!("{:.2}% loss", pct),
+                            _ => format!("risk-cut close ({}), pnl unknown", reason),
                         };
-                        // Cooldown pool for 1 hour
-                        pool_memory.set_pool_cooldown(&pool_address, "loss_close", 60);
+                        pool_memory.set_pool_cooldown(&pool_address, "loss_close", minutes);
                         // Cooldown token too
-                        pool_memory.set_base_mint_cooldown_minutes(&base_mint, 60, "loss_close");
+                        pool_memory.set_base_mint_cooldown_minutes(
+                            &base_mint,
+                            minutes,
+                            "loss_close",
+                        );
                         info(
                             "executor",
-                            &format!("Set 1h cooldown on pool/token after {}", detail),
+                            &format!(
+                                "Set {}min cooldown on pool/token after {}",
+                                minutes, detail
+                            ),
                         );
                     }
                 }
