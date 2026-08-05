@@ -752,12 +752,8 @@ pub async fn claim_fee_accounts_preview(
 
     let plan = resolve_claim_accounts(position_address, config).await?;
     let rpc = RpcClientV2::new(resolve_rpc_url(config));
-    let exists = |a: &PubkeyV2| {
-        let rpc = &rpc;
-        async move { rpc.get_account(a).await.is_ok() }
-    };
-    let x_exists = exists(&plan.user_token_x).await;
-    let y_exists = exists(&plan.user_token_y).await;
+    let x_exists = rpc.get_account(&plan.user_token_x).await.is_ok();
+    let y_exists = rpc.get_account(&plan.user_token_y).await.is_ok();
     let chunks = position_bin_range_chunks(
         plan.position_state.lower_bin_id,
         plan.position_state.upper_bin_id,
