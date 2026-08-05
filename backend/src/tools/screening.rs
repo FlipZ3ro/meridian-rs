@@ -15,6 +15,8 @@ const SMART_MONEY_SCORE_WEIGHT: f64 = 25.0;
 /// Score boost weight for the LP Agent profitable-LPer ratio (0.0–1.0). A pool
 /// whose established LPers are all net-profitable gets the full boost.
 const LPER_SCORE_WEIGHT: f64 = 40.0;
+/// Win rate treated as neutral: above it a pool scores up, below it scores down.
+const LPER_NEUTRAL_WIN_RATE: f64 = 0.5;
 const PVP_MIN_GLOBAL_FEES_SOL: f64 = 30.0;
 
 static TIMEFRAME_MINUTES: &[(&str, u32)] = &[
@@ -325,20 +327,25 @@ impl Screener {
             // net-profitable (real-money proof the pool is a good place to LP).
             // Soft score boost — never a hard gate.
             if lpagent && !candidate.pool_address.is_empty() {
-                if let Some(ratio) = crate::tools::lpagent::get_pool_profitable_lper_ratio(
-                    &candidate.pool_address,
-                    config,
-                )
-                .await
+                if let Some(win_rate) =
+                    crate::tools::lpagent::get_pool_lper_win_rate(&candidate.pool_address, config)
+                        .await
                 {
-                    candidate.score += ratio * LPER_SCORE_WEIGHT;
-                    if ratio >= 0.6 {
+                    // Score around the break-even point rather than adding a flat
+                    // positive: a pool where most LP positions LOSE should be
+                    // pushed down, not merely boosted less. Measured live win
+                    // rates span ~30%–52%, so 50% is a meaningful midpoint and the
+                    // signal now actually separates candidates.
+                    let centered = (win_rate - LPER_NEUTRAL_WIN_RATE) / LPER_NEUTRAL_WIN_RATE;
+                    candidate.score += centered.clamp(-1.0, 1.0) * LPER_SCORE_WEIGHT;
+                    if win_rate >= 0.5 || win_rate < 0.35 {
                         info(
                             "screening",
                             &format!(
-                                "LPer quality {} — {:.0}% of top LPers profitable → boost",
+                                "LPer quality {} — {:.0}% of LP positions profitable (SOL) → {}",
                                 candidate.name,
-                                ratio * 100.0
+                                win_rate * 100.0,
+                                if win_rate >= 0.5 { "boost" } else { "penalty" }
                             ),
                         );
                     }

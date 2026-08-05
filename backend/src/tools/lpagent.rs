@@ -29,16 +29,27 @@ fn num(v: &Value) -> Option<f64> {
     }
 }
 
-/// Fraction (0.0–1.0) of a pool's established top LPers that are net-profitable
-/// (`total_pnl > 0`), considering only LPers with meaningful inflow + age so
-/// dust/instant flips don't skew it. `None` on missing key / error / no data.
-pub async fn get_pool_profitable_lper_ratio(pool: &str, _config: &Config) -> Option<f64> {
+/// Position-weighted win rate (0.0–1.0) for a pool: of all the individual LP
+/// positions opened by the pool's largest liquidity providers, what fraction
+/// ended profitable *in SOL terms* (`win_lp_native / total_lp`)?
+///
+/// Sampled by `total_inflow` — the biggest LPers — deliberately. The previous
+/// implementation asked for the top LPers by `total_pnl` and then measured how
+/// many of them had `total_pnl > 0`, which is a tautology: it returned ~100% for
+/// every pool measured (three live pools all scored 20/20), so the score boost
+/// was a constant with zero ranking power, and it stamped "100% profitable" on
+/// pools that promptly stopped us out. Sorting by size instead samples whoever
+/// actually committed capital, win or lose, and the SOL-denominated win rate is
+/// the right lens for a single-side-SOL strategy.
+///
+/// `None` on missing key / error / no data.
+pub async fn get_pool_lper_win_rate(pool: &str, _config: &Config) -> Option<f64> {
     let key = lpagent_api_key()?;
     if pool.is_empty() {
         return None;
     }
     let url = format!(
-        "{}/pools/{}/top-lpers?order_by=total_pnl&sort_order=desc&page=1&limit=20",
+        "{}/pools/{}/top-lpers?order_by=total_inflow&sort_order=desc&page=1&limit=20",
         LPAGENT_BASE, pool
     );
     let client = reqwest::Client::new();
@@ -54,21 +65,35 @@ pub async fn get_pool_profitable_lper_ratio(pool: &str, _config: &Config) -> Opt
         .ok()?;
     let list = resp.get("data").and_then(Value::as_array)?;
 
-    let (mut considered, mut profitable) = (0u32, 0u32);
+    let (mut winning_positions, mut total_positions) = (0.0f64, 0.0f64);
     for lp in list {
+        // Some pools carry a synthetic row with an empty owner that buckets
+        // hundreds of unattributed positions. Counting it as one LPer badly
+        // skews any per-LPer statistic, so drop it.
+        if lp.get("owner").and_then(Value::as_str).unwrap_or("").is_empty() {
+            continue;
+        }
         // Skip dust / near-instant LPers — they add noise, not signal.
         let inflow = lp.get("total_inflow").and_then(num).unwrap_or(0.0);
         let age_hours = lp.get("avg_age_hour").and_then(num).unwrap_or(0.0);
         if inflow < 50.0 || age_hours < 0.5 {
             continue;
         }
-        considered += 1;
-        if lp.get("total_pnl").and_then(num).unwrap_or(0.0) > 0.0 {
-            profitable += 1;
+        let positions = lp.get("total_lp").and_then(num).unwrap_or(0.0);
+        if positions <= 0.0 {
+            continue;
         }
+        // Weight by positions, not by LPer: one whale with 200 positions says
+        // more about the pool than one tourist with a single lucky entry.
+        total_positions += positions;
+        winning_positions += lp
+            .get("win_lp_native")
+            .and_then(num)
+            .or_else(|| lp.get("win_lp").and_then(num))
+            .unwrap_or(0.0);
     }
-    if considered == 0 {
+    if total_positions <= 0.0 {
         return None;
     }
-    Some(profitable as f64 / considered as f64)
+    Some((winning_positions / total_positions).clamp(0.0, 1.0))
 }
