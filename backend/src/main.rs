@@ -211,6 +211,58 @@ async fn reconcile_positions_on_chain(
     }
 }
 
+/// Push a closed-position summary to Telegram.
+///
+/// Only risk cuts and banked winners are sent — a plain range exit near
+/// breakeven is noise, and a channel that pings on every close stops being read.
+/// Silent when Telegram isn't configured.
+///
+/// The net figure matters more than the raw PnL: fees routinely cover most of a
+/// stop-loss, so "-6%" alone reads far worse than the position actually was.
+async fn notify_close_to_telegram(
+    config: &config::Config,
+    positions: &state::positions::PositionState,
+    position_id: &str,
+    reason: &str,
+) {
+    let (Some(token), Some(chat_id)) = (
+        config.api.telegram_bot_token.as_deref(),
+        config.api.telegram_chat_id.as_deref(),
+    ) else {
+        return;
+    };
+    let Some(pos) = positions.positions.get(position_id) else {
+        return;
+    };
+
+    let pnl_pct = pos.pnl_pct.unwrap_or(0.0);
+    let lower = reason.to_ascii_lowercase();
+    let is_risk_cut = lower.contains("stop loss") || lower.contains("safety exit");
+    let is_win = pnl_pct > 0.0
+        && (lower.contains("trailing")
+            || lower.contains("take-profit")
+            || lower.contains("take profit"));
+    if !is_risk_cut && !is_win {
+        return;
+    }
+
+    let pool = pos.pool_name.as_deref().unwrap_or("unknown");
+    let fees = pos.all_time_fees_usd.unwrap_or(0.0);
+    let pnl_usd = pos.pnl_usd.unwrap_or(0.0);
+    let text = format!(
+        "{} <b>{}</b>\n{}\n\nPnL: <b>{:+.2}%</b> ({:+.4} SOL / {:+.2} USD)\nFees: {:.2} USD\n<b>Net: {:+.2} USD</b>",
+        if is_risk_cut { "🛑" } else { "✅" },
+        pool,
+        reason,
+        pnl_pct,
+        pos.pnl_sol.unwrap_or(0.0),
+        pnl_usd,
+        fees,
+        pnl_usd + fees,
+    );
+    let _ = tools::telegram::send_message_safe(token, chat_id, &text).await;
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
@@ -493,6 +545,13 @@ async fn main() -> Result<()> {
                                             "pnl_poll",
                                             &format!("auto-closed {} — {}", addr, reason),
                                         );
+                                        notify_close_to_telegram(
+                                            &config_pnl,
+                                            &positions,
+                                            addr,
+                                            reason,
+                                        )
+                                        .await;
                                         any_closed = true;
                                     }
                                 }
