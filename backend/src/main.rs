@@ -810,6 +810,19 @@ async fn main() -> Result<()> {
         }
     });
 
+    // ── Interactive Telegram control (admin-only) ──────────────
+    // No-op when Telegram isn't configured. Serves /status /positions /pnl
+    // /balance /candidates, toggles quick-flip, and pauses new deploys via
+    // /stop — useful because this branch's only other control surface is the
+    // dashboard, which needs a browser.
+    {
+        let tg_config = config.clone();
+        let tg_state = state_path.clone();
+        tokio::spawn(async move {
+            tools::telegram_bot::run(tg_config, tg_state).await;
+        });
+    }
+
     // ── Health check endpoint (TCP listener) ───────────────────
     let mut shutdown_health = shutdown_rx.clone();
 

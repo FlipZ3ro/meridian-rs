@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use crate::agent::loop_::{AgentLoop, AgentRunContext};
 use crate::agent::prompt::AgentRole;
 use crate::config::loader::compute_deploy_amount;
@@ -686,6 +688,23 @@ fn build_screening_goal(
     }
 }
 
+/// Process-wide trading switch. `/stop` on Telegram flips it off and `/start`
+/// back on; the screening cycle refuses to open new positions while it is off.
+/// Exits are deliberately NOT gated by it — pausing must never strand an open
+/// position without its stop-loss. A module static rather than an injected Arc,
+/// matching how `quickflip::QUICKFLIP_ENABLED` is shared on this branch.
+pub static TRADING_ENABLED: AtomicBool = AtomicBool::new(true);
+
+/// Pause or resume opening new positions.
+pub fn set_trading_enabled(on: bool) {
+    TRADING_ENABLED.store(on, Ordering::SeqCst);
+}
+
+/// Whether the bot may open new positions.
+pub fn is_trading_enabled() -> bool {
+    TRADING_ENABLED.load(Ordering::SeqCst)
+}
+
 pub async fn run_screening_cycle(
     config: &Config,
     llm: &LlmClient,
@@ -695,6 +714,12 @@ pub async fn run_screening_cycle(
     wallet_address: &str,
 ) -> Result<String> {
     info("cycle", "Screening Cycle Starting");
+
+    if !is_trading_enabled() {
+        let msg = "Trading is paused (/stop) — skipping screening.".to_string();
+        info("cycle", &msg);
+        return Ok(msg);
+    }
 
     let active_count = positions.count_active();
     if active_count >= config.risk.max_positions as usize {
