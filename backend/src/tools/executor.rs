@@ -895,11 +895,17 @@ impl ToolExecutor {
                                 symbol: pos.base_symbol.clone(),
                                 deployed_at: Some(pos.created_at.clone()),
                                 closed_at: Some(chrono::Utc::now().to_rfc3339()),
-                                pnl_pct: pos
-                                    .signal_snapshot
-                                    .as_ref()
-                                    .and_then(|s| s.get("pnlPct"))
-                                    .and_then(Value::as_f64),
+                                // Live PnL persisted by the pnl poll. Falls back to
+                                // the deploy-time signal snapshot only if a poll
+                                // never landed — reading the snapshot first was why
+                                // every pool-memory record stored a null pnl_pct
+                                // (the snapshot holds entry data, not exit data).
+                                pnl_pct: pos.pnl_pct.or_else(|| {
+                                    pos.signal_snapshot
+                                        .as_ref()
+                                        .and_then(|s| s.get("pnlPct"))
+                                        .and_then(Value::as_f64)
+                                }),
                                 fees_earned_sol: Some(pos.total_fees_claimed),
                                 close_reason: Some(reason.to_string()),
                                 strategy: pos
@@ -940,10 +946,13 @@ impl ToolExecutor {
                         // (fire-and-forget; failures are logged and non-blocking).
                         if crate::hivemind::is_enabled(&config.hive_mind) {
                             let pnl_pct = pos
-                                .signal_snapshot
-                                .as_ref()
-                                .and_then(|s| s.get("pnlPct"))
-                                .and_then(Value::as_f64)
+                                .pnl_pct
+                                .or_else(|| {
+                                    pos.signal_snapshot
+                                        .as_ref()
+                                        .and_then(|s| s.get("pnlPct"))
+                                        .and_then(Value::as_f64)
+                                })
                                 .unwrap_or(0.0);
                             let strategy = pos
                                 .signal_snapshot

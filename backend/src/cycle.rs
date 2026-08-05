@@ -77,6 +77,11 @@ struct PnlPollSnapshot {
     minutes_out_of_range: u32,
     fee_tvl: Option<f64>,
     active_bin: i32,
+    /// Economics carried through so the poll can persist them onto the position
+    /// (see TrackedPosition::pnl_pct) instead of only using PnL for exit rules.
+    pnl_usd: Option<f64>,
+    unclaimed_fee_usd: Option<f64>,
+    all_time_fees_usd: Option<f64>,
 }
 
 fn format_management_action_block(
@@ -425,6 +430,9 @@ pub async fn run_pnl_poll(
         let mut fee_tvl: Option<f64> = None;
         let mut active_bin = 0i32;
         let mut pnl_in_range: Option<bool> = None;
+        let mut pnl_usd: Option<f64> = None;
+        let mut unclaimed_fee_usd: Option<f64> = None;
+        let mut all_time_fees_usd: Option<f64> = None;
 
         // Fetch real PnL
         if let Ok(pnl_result) =
@@ -432,6 +440,9 @@ pub async fn run_pnl_poll(
         {
             pnl_pct = pnl_result.pnl_pct;
             fee_tvl = pnl_result.fee_per_tvl_24h;
+            pnl_usd = pnl_result.pnl_usd;
+            unclaimed_fee_usd = pnl_result.unclaimed_fee_usd;
+            all_time_fees_usd = pnl_result.all_time_fees_usd;
             // Authoritative in-range flag from the API (isOutOfRange).
             pnl_in_range = pnl_result.in_range;
             // Also try to get active_bin from PnL response
@@ -457,7 +468,41 @@ pub async fn run_pnl_poll(
             minutes_out_of_range: minutes_out_of_range(p),
             fee_tvl,
             active_bin,
+            pnl_usd,
+            unclaimed_fee_usd,
+            all_time_fees_usd,
         });
+    }
+
+    // Persist the freshly polled economics onto each position BEFORE the exit
+    // rules run, so a close in this same tick records real numbers. Previously
+    // PnL was computed only to drive exits and discarded, leaving pnl_sol None
+    // forever — every close then recorded 0.0 SOL, pool memory stored a null
+    // pnl_pct, and win-rate/cooldown logic that keys off pnl silently no-opped.
+    for snapshot in &pos_data {
+        if let Some(pos) = positions.positions.get_mut(&snapshot.id) {
+            if let Some(pct) = snapshot.pnl_pct {
+                pos.pnl_pct = Some(pct);
+                // The PnL API exposes no SOL figure on this endpoint, so derive
+                // it from the deployed principal — good enough for close records
+                // and loss cooldowns, and consistent with amount_sol accounting.
+                pos.pnl_sol = Some(pos.amount_sol * pct / 100.0);
+            }
+            if snapshot.pnl_usd.is_some() {
+                pos.pnl_usd = snapshot.pnl_usd;
+            }
+            if snapshot.unclaimed_fee_usd.is_some() {
+                pos.unclaimed_fee_usd = snapshot.unclaimed_fee_usd;
+            }
+            // All-time fees come from the API, so they stay correct even when the
+            // claim path fails (Token-2022 positions never record claimed fees).
+            if snapshot.all_time_fees_usd.is_some() {
+                pos.all_time_fees_usd = snapshot.all_time_fees_usd;
+            }
+            if snapshot.pnl_pct.is_some() || snapshot.pnl_usd.is_some() {
+                pos.pnl_updated_at = Some(chrono::Utc::now().to_rfc3339());
+            }
+        }
     }
 
     let mut exits_needed: Vec<(String, String)> = vec![];

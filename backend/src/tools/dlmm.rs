@@ -421,6 +421,16 @@ pub struct ClaimResult {
     pub txs: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_mint: Option<String>,
+    /// SOL-side fee actually harvested by this claim. Serializes as `claimedSol`,
+    /// which is the key `PositionState::record_claim` reads — without it every
+    /// claim recorded 0.0 and `total_fees_claimed` stayed empty forever, hiding
+    /// the fee income that is the whole point of the strategy.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claimed_sol: Option<f64>,
+    /// Base-token side of the same claim, in raw base units (decimals vary by
+    /// mint, so this is informational rather than summable).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claimed_base_raw: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -1255,6 +1265,8 @@ pub async fn claim_fees(position_address: &str, config: &Config) -> Result<Claim
             position: Some(position_address),
             txs: None,
             base_mint: None,
+            claimed_sol: None,
+            claimed_base_raw: None,
             error: Some("DRY RUN — no transaction sent".to_string()),
         });
     }
@@ -1277,6 +1289,10 @@ pub async fn claim_fees(position_address: &str, config: &Config) -> Result<Claim
                 position: Some(position_address),
                 txs: Some(vec![result.signature]),
                 base_mint: None,
+                // token_y is the SOL side on these pools (deploy_position funds
+                // amount_y with lamports), so fee_y is the harvested SOL.
+                claimed_sol: Some(result.claimable_fee_y as f64 / 1_000_000_000.0),
+                claimed_base_raw: Some(result.claimable_fee_x),
                 error: None,
             })
         }
@@ -1287,6 +1303,8 @@ pub async fn claim_fees(position_address: &str, config: &Config) -> Result<Claim
                 position: Some(position_address),
                 txs: None,
                 base_mint: None,
+                claimed_sol: None,
+                claimed_base_raw: None,
                 error: Some(format!("Native Meteora claim failed: {}", e)),
             })
         }
