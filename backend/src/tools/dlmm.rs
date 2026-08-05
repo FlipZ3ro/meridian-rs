@@ -1256,6 +1256,14 @@ pub async fn close_position(
 /// Since the Meteora DLMM SDK crate is not available in Rust, this function
 /// builds the claim transaction data. In the current implementation, it
 /// returns a placeholder indicating what would be claimed.
+/// Whether an on-chain error is the `user_token_y` AnchorError 3012 that the
+/// commons claim path is meant to route around. Matched on text because the
+/// error arrives as a formatted RPC/simulation string, and on the numeric forms
+/// too since some responses only carry the code (3012 = 0xbc4).
+fn is_account_not_initialized(msg: &str) -> bool {
+    msg.contains("AccountNotInitialized") || msg.contains("3012") || msg.contains("0xbc4")
+}
+
 pub async fn claim_fees(position_address: &str, config: &Config) -> Result<ClaimResult> {
     let position_address = crate::tools::wallet::normalize_mint(position_address);
 
@@ -1298,6 +1306,67 @@ pub async fn claim_fees(position_address: &str, config: &Config) -> Result<Claim
         }
         Err(e) => {
             tracing::error!("native claim_fees failed: {}", e);
+
+            // wp resolves `user_token_y` internally and, for some positions,
+            // passes an account that isn't initialized — AnchorError 3012 —
+            // even when the wallet's canonical ATA for that mint exists. Those
+            // claims fail forever, so retry through the commons path, which
+            // builds the account set explicitly (canonical ATAs, token programs
+            // read from LbPair's flags, fee_owner honoured).
+            //
+            // Deliberately scoped to this one error: it only runs where the
+            // existing path has ALREADY failed, so it cannot make a working
+            // claim worse.
+            let msg = e.to_string();
+            if is_account_not_initialized(&msg) {
+                tracing::warn!(
+                    "wp claim hit AccountNotInitialized — retrying via commons claim path"
+                );
+                match crate::tools::meteora_native::claim_fees_commons(&position_address, config)
+                    .await
+                {
+                    Ok(result) => {
+                        tracing::info!(
+                            signatures = %result.signature,
+                            "commons claim succeeded after wp AccountNotInitialized"
+                        );
+                        return Ok(ClaimResult {
+                            success: true,
+                            position: Some(position_address),
+                            txs: Some(
+                                result
+                                    .signature
+                                    .split(',')
+                                    .map(str::to_string)
+                                    .filter(|s| !s.is_empty())
+                                    .collect(),
+                            ),
+                            base_mint: None,
+                            claimed_sol: Some(
+                                result.claimable_fee_y as f64 / 1_000_000_000.0,
+                            ),
+                            claimed_base_raw: Some(result.claimable_fee_x),
+                            error: None,
+                        });
+                    }
+                    Err(commons_err) => {
+                        tracing::error!("commons claim fallback also failed: {}", commons_err);
+                        return Ok(ClaimResult {
+                            success: false,
+                            position: Some(position_address),
+                            txs: None,
+                            base_mint: None,
+                            claimed_sol: None,
+                            claimed_base_raw: None,
+                            error: Some(format!(
+                                "Native Meteora claim failed: {}; commons fallback failed: {}",
+                                e, commons_err
+                            )),
+                        });
+                    }
+                }
+            }
+
             Ok(ClaimResult {
                 success: false,
                 position: Some(position_address),
