@@ -203,6 +203,12 @@ pub enum CliCommand {
     ClaimPreview {
         position: String,
     },
+    /// Claim fees through the commons path. Sends a real transaction, so it
+    /// refuses to run without an explicit --confirm.
+    ClaimCommons {
+        position: String,
+        confirm: bool,
+    },
     Close {
         position: String,
         reason: Option<String>,
@@ -359,6 +365,11 @@ pub fn parse_cli_args(args: &[String]) -> Result<Option<CliCommand>> {
                 .transpose()?,
             strategy: optional_flag(tail, &["--strategy"]),
             dry_run: has_flag(tail, "--dry-run"),
+        })),
+        "claim-commons" => Ok(Some(CliCommand::ClaimCommons {
+            position: required_flag(tail, &["--position", "--position-address"])?
+                .ok_or_else(|| anyhow!("claim-commons requires --position <position>"))?,
+            confirm: has_flag(tail, "--confirm"),
         })),
         "claim-preview" => Ok(Some(CliCommand::ClaimPreview {
             position: required_flag(tail, &["--position", "--position-address"])?
@@ -675,6 +686,7 @@ pub fn command_name(command: &CliCommand) -> &'static str {
         CliCommand::Deploy { .. } => "deploy",
         CliCommand::Claim { .. } => "claim",
         CliCommand::ClaimPreview { .. } => "claim-preview",
+        CliCommand::ClaimCommons { .. } => "claim-commons",
         CliCommand::Close { .. } => "close",
         CliCommand::Swap { .. } => "swap",
     }
@@ -1488,6 +1500,21 @@ pub async fn run_cli_command(
         CliCommand::ClaimPreview { position } => Ok(CliOutput::Json(
             crate::tools::meteora_native::claim_fee_accounts_preview(&position, config).await?,
         )),
+        CliCommand::ClaimCommons { position, confirm } => {
+            if !confirm {
+                anyhow::bail!(
+                    "claim-commons sends a real transaction — re-run with --confirm to proceed \
+                     (use claim-preview to inspect the accounts first)"
+                );
+            }
+            let result =
+                crate::tools::meteora_native::claim_fees_commons(&position, config).await?;
+            Ok(CliOutput::Json(serde_json::json!({
+                "signatures": result.signature,
+                "claimableFeeX": result.claimable_fee_x,
+                "claimableFeeY": result.claimable_fee_y,
+            })))
+        }
         CliCommand::Close {
             position,
             reason,
