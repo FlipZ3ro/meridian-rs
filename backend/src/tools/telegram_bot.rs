@@ -698,47 +698,41 @@ async fn portfolio_text(config: &Config, state_path: &str) -> String {
     let rent_locked = open.len() as f64 * 0.0574 * sol_price;
 
     let net = r_pnl + r_fees + u_pnl + u_fees;
-    // Monospace block: the numbers line up in a column, which is the whole
-    // point of a portfolio view on a phone. Markdown inside a fence is inert,
-    // so alignment is done with padding rather than bold.
-    let mut body = format!(
-        "REALIZED  {:>3} closed   {:>+8.2}
-  pnl {:>+9.2}
-  fee {:>+9.2}
 
-         UNREALIZED{:>3} open     {:>+8.2}
-  pnl {:>+9.2}
-  fee {:>+9.2}",
-        closed.len(),
-        r_pnl + r_fees,
-        r_pnl,
-        r_fees,
-        open.len(),
-        u_pnl + u_fees,
-        u_pnl,
-        u_fees,
-    );
+    // Fixed-width rows inside a monospace fence: label left, figure right, so
+    // every number lands in the same column. Built line by line — a multi-line
+    // format string with continuations silently kept its source indentation and
+    // produced a ragged block.
+    let row = |label: &str, value: f64| format!("{:<16}{:>10.2}
+", label, value);
+    let mut body = String::new();
+    body.push_str(&format!("REALIZED   {} closed
+", closed.len()));
+    body.push_str(&row("  pnl", r_pnl));
+    body.push_str(&row("  fee", r_fees));
+    body.push_str(&row("  subtotal", r_pnl + r_fees));
+    body.push_str(&format!("
+UNREALIZED {} open
+", open.len()));
+    body.push_str(&row("  pnl", u_pnl));
+    body.push_str(&row("  fee", u_fees));
+    body.push_str(&row("  subtotal", u_pnl + u_fees));
     if rent_locked > 0.0 {
-        body.push_str(&format!(
-            "
-
-rent locked {:>10.2}
-  ({} x 0.057 SOL, refunded on close)",
-            rent_locked,
-            open.len()
-        ));
+        body.push('
+');
+        body.push_str(&row("rent locked", rent_locked));
+        body.push_str("  (refunded on close)
+");
     }
-    body.push_str(&format!(
-        "
-{}
-NET       {:>16.2}",
-        "-".repeat(30),
-        net
-    ));
+    body.push_str(&"-".repeat(26));
+    body.push('
+');
+    body.push_str(&row("NET", net));
     if !closed.is_empty() {
         body.push_str(&format!(
-            "
-win rate  {:>11.0}%  {}/{}",
+            "{:<16}{:>9.0}%  {}/{}
+",
+            "win rate",
             wins as f64 / closed.len() as f64 * 100.0,
             wins,
             closed.len()
@@ -747,6 +741,5 @@ win rate  {:>11.0}%  {}/{}",
     format!("💰 *PORTFOLIO*
 
 ```
-{body}
-```")
+{body}```")
 }
