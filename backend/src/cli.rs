@@ -209,6 +209,16 @@ pub enum CliCommand {
         position: String,
         confirm: bool,
     },
+    /// Build a commons deploy and run it through simulateTransaction. Sends
+    /// nothing unless --confirm is given.
+    DeployCommons {
+        pool: String,
+        amount_sol: f64,
+        bins_below: Option<i64>,
+        bins_above: Option<i64>,
+        strategy: Option<String>,
+        confirm: bool,
+    },
     Close {
         position: String,
         reason: Option<String>,
@@ -365,6 +375,21 @@ pub fn parse_cli_args(args: &[String]) -> Result<Option<CliCommand>> {
                 .transpose()?,
             strategy: optional_flag(tail, &["--strategy"]),
             dry_run: has_flag(tail, "--dry-run"),
+        })),
+        "deploy-commons" => Ok(Some(CliCommand::DeployCommons {
+            pool: required_flag(tail, &["--pool", "--pool-address"])?
+                .ok_or_else(|| anyhow!("deploy-commons requires --pool <pool>"))?,
+            amount_sol: required_flag(tail, &["--amount-sol", "--amount"])?
+                .ok_or_else(|| anyhow!("deploy-commons requires --amount-sol <sol>"))?
+                .parse()?,
+            bins_below: optional_flag(tail, &["--bins-below"])
+                .map(|v| v.parse())
+                .transpose()?,
+            bins_above: optional_flag(tail, &["--bins-above"])
+                .map(|v| v.parse())
+                .transpose()?,
+            strategy: optional_flag(tail, &["--strategy"]),
+            confirm: has_flag(tail, "--confirm"),
         })),
         "claim-commons" => Ok(Some(CliCommand::ClaimCommons {
             position: required_flag(tail, &["--position", "--position-address"])?
@@ -687,6 +712,7 @@ pub fn command_name(command: &CliCommand) -> &'static str {
         CliCommand::Claim { .. } => "claim",
         CliCommand::ClaimPreview { .. } => "claim-preview",
         CliCommand::ClaimCommons { .. } => "claim-commons",
+        CliCommand::DeployCommons { .. } => "deploy-commons",
         CliCommand::Close { .. } => "close",
         CliCommand::Swap { .. } => "swap",
     }
@@ -1500,6 +1526,36 @@ pub async fn run_cli_command(
         CliCommand::ClaimPreview { position } => Ok(CliOutput::Json(
             crate::tools::meteora_native::claim_fee_accounts_preview(&position, config).await?,
         )),
+        CliCommand::DeployCommons {
+            pool,
+            amount_sol,
+            bins_below,
+            bins_above,
+            strategy,
+            confirm,
+        } => {
+            let outcome = crate::tools::meteora_native::deploy_position_commons(
+                &pool,
+                amount_sol,
+                bins_below.unwrap_or(20),
+                bins_above.unwrap_or(0),
+                strategy.as_deref().unwrap_or("spot"),
+                config,
+                !confirm,
+            )
+            .await?;
+            Ok(CliOutput::Json(serde_json::json!({
+                "simulated": outcome.simulated,
+                "signature": outcome.signature,
+                "positionAddress": outcome.position_address,
+                "activeId": outcome.active_id,
+                "binRange": [outcome.min_bin_id, outcome.max_bin_id],
+                "unitsConsumed": outcome.units_consumed,
+                "error": outcome.error,
+                // Only the tail matters — the program's own verdict.
+                "logs": outcome.logs.iter().rev().take(12).rev().collect::<Vec<_>>(),
+            })))
+        }
         CliCommand::ClaimCommons { position, confirm } => {
             if !confirm {
                 anyhow::bail!(
