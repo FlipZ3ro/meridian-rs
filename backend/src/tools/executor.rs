@@ -848,14 +848,22 @@ impl ToolExecutor {
                 Ok(())
             }
             "swap_token" => {
-                let from = args["from_mint"].as_str().unwrap_or("");
-                let to = args["to_mint"].as_str().unwrap_or("");
-                if from.is_empty() || to.is_empty() {
-                    anyhow::bail!("from_mint and to_mint required");
+                // Match the tool definition the model actually sees: a single
+                // `mint` (swaps are always token → SOL, so there is no to_mint),
+                // and `amount` where 0 means "all". This check previously
+                // demanded from_mint AND to_mint — neither of which the schema
+                // declares — so every model-issued swap failed validation before
+                // reaching the handler, filling the activity log with
+                // "from_mint and to_mint required".
+                let from = args["mint"]
+                    .as_str()
+                    .or_else(|| args["from_mint"].as_str())
+                    .unwrap_or("");
+                if from.is_empty() {
+                    anyhow::bail!("mint required");
                 }
-                let amount = args["amount"].as_f64().unwrap_or(0.0);
-                if amount <= 0.0 {
-                    anyhow::bail!("amount must be > 0");
+                if args["amount"].as_f64().is_some_and(|a| a < 0.0) {
+                    anyhow::bail!("amount must not be negative");
                 }
                 Ok(())
             }
@@ -2057,8 +2065,26 @@ impl ToolExecutor {
                     .as_str()
                     .or_else(|| args["mint"].as_str())
                     .unwrap_or("");
-                let _to = args["to_mint"].as_str().unwrap_or("");
-                let amount = args["amount"].as_f64().unwrap_or(0.0);
+                let mut amount = args["amount"].as_f64().unwrap_or(0.0);
+                // The tool schema documents "0 = all", but nothing implemented
+                // it: a zero amount was passed straight through and Jupiter has
+                // no route for it. Resolve it to the wallet's whole balance.
+                if amount <= 0.0 {
+                    amount = crate::tools::meteora_native::wallet_token_ui_balance(config, from)
+                        .await
+                        .unwrap_or(0.0);
+                    if amount <= 0.0 {
+                        return Ok(json!({
+                            "success": false,
+                            "error": format!("no balance to swap for {}", from),
+                        })
+                        .to_string());
+                    }
+                    info(
+                        "executor",
+                        &format!("swap amount 0 → using full balance {}", amount),
+                    );
+                }
                 // Try real Jupiter swap
                 match swap_token(from, amount, 50, 100, config).await {
                     Ok(result) => Ok(serde_json::to_string_pretty(&result)?),
