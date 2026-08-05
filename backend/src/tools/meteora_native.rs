@@ -642,10 +642,9 @@ pub async fn claim_fees_commons(
     // A position can span more bins than one instruction's account list allows,
     // so the official client walks it in chunks — mirror that.
     let mut signatures: Vec<String> = Vec::new();
-    for (min_bin_id, max_bin_id) in commons::position_bin_range_chunks(
-        position_state.lower_bin_id,
-        position_state.upper_bin_id,
-    ) {
+    for (min_bin_id, max_bin_id) in
+        position_bin_range_chunks(position_state.lower_bin_id, position_state.upper_bin_id)
+    {
         let data = commons::dlmm::client::args::ClaimFee2 {
             min_bin_id,
             max_bin_id,
@@ -684,6 +683,26 @@ pub async fn claim_fees_commons(
         claimable_fee_x: quote.fee_x,
         claimable_fee_y: quote.fee_y,
     })
+}
+
+/// Split a position's bin range into per-instruction chunks. Ported from the
+/// official `cli/src/instructions/utils.rs` — it lives in the CLI binary rather
+/// than in `commons`, so it cannot be imported. A position can cover more bins
+/// than one ClaimFee2 instruction can carry accounts for, and the on-chain
+/// program expects the claim to be walked in these fixed-size windows.
+fn position_bin_range_chunks(lower_bin_id: i32, upper_bin_id: i32) -> Vec<(i32, i32)> {
+    let bin_per_position = commons::DEFAULT_BIN_PER_POSITION as i32;
+    let bin_range = upper_bin_id - lower_bin_id + 1;
+    let quotient = bin_range / bin_per_position;
+    let remainder = bin_range % bin_per_position;
+    let chunk = quotient + i32::from(remainder != 0);
+    (0..chunk)
+        .map(|i| {
+            let min_bin_id = lower_bin_id + bin_per_position * i;
+            let max_bin_id = std::cmp::min(min_bin_id + bin_per_position - 1, upper_bin_id);
+            (min_bin_id, max_bin_id)
+        })
+        .collect()
 }
 
 /// solana **v2** keypair for `commons` call sites (the rest of this file signs
