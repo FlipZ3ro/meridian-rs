@@ -1724,6 +1724,36 @@ async fn unwrap_wsol(rpc: &RpcClient, keypair: &Keypair) -> Result<Option<String
     Ok(Some(signature.to_string()))
 }
 
+/// Recreate the wallet's canonical wSOL associated token account if it is
+/// missing, idempotently.
+///
+/// Every open position's SOL side resolves to this single shared account. A
+/// Jupiter swap to SOL unwraps and closes it as a side effect, which is what
+/// made an open position's next claim or close fail with AccountNotInitialized.
+/// Calling this straight after any swap keeps the window closed.
+pub async fn ensure_wsol_ata(config: &Config) -> Result<()> {
+    let keypair = keypair_from_secret(&wallet_secret_from_env()?)?;
+    let owner = keypair.pubkey();
+    let rpc = RpcClient::new(resolve_rpc_url(config));
+    let wsol_mint = Pubkey::from_str(WSOL_MINT)?;
+    let token_program = Pubkey::from_str(SPL_TOKEN_PROGRAM_ID)?;
+    let ata = derive_ata(&owner, &wsol_mint, &token_program);
+    if rpc.get_account(&ata).await.is_ok() {
+        return Ok(());
+    }
+    let ix = create_ata_idempotent_ix(&owner, &owner, &wsol_mint, &token_program);
+    let blockhash = rpc.get_latest_blockhash().await?;
+    let tx = solana_sdk_v3::transaction::Transaction::new_signed_with_payer(
+        &[ix],
+        Some(&owner),
+        &[&keypair],
+        blockhash,
+    );
+    let sig = rpc.send_and_confirm_transaction(&tx).await?;
+    tracing::info!(signature = %sig, "recreated wSOL ATA after swap");
+    Ok(())
+}
+
 /// Close any wSOL token accounts the wallet holds, converting wrapped SOL back
 /// to native SOL. Safety net for residual wSOL when the per-close unwrap missed
 /// or failed transiently (e.g. a race with a concurrent op). Uses the env

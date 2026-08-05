@@ -74,6 +74,34 @@ fn set_json_string_if_missing(value: &mut Value, key: &str, content: Option<&str
     }
 }
 
+/// Whether claimed fees should be converted to SOL right now.
+///
+/// True only while the base token is over-extended upward — the same `%B`
+/// reading the over-extended take-profit fires on. The two differ in what they
+/// do with it: that rule closes the position, this one banks the fees and lets
+/// the position keep earning.
+///
+/// Any error means "don't swap": a missed banking opportunity costs nothing,
+/// while swapping on a bad or unknown price is a real loss.
+async fn should_bank_fees(result: &Value, config: &Config) -> bool {
+    if !config.management.exit_overextended_enabled {
+        return false;
+    }
+    let Some(base_mint) = json_str(result, &["baseMint", "base_mint"]) else {
+        return false;
+    };
+    if base_mint.is_empty() || normalize_mint(base_mint) == SOL_MINT {
+        return false;
+    }
+    match crate::tools::bollinger::exit_signals(config, base_mint).await {
+        Ok(sig) => sig
+            .percent_b
+            .map(|b| b >= config.management.exit_bb_upper_pctb)
+            .unwrap_or(false),
+        Err(_) => false,
+    }
+}
+
 /// True when a close reason represents a risk cut (the position was closed
 /// because it was losing), as opposed to a take-profit or a range exit. Matched
 /// on the reason text because the deterministic pnl-poll closes pass their rule
@@ -1240,6 +1268,17 @@ impl ToolExecutor {
             );
             match swap_token(&base_mint, balance, 300, 100, config).await {
                 Ok(swap) if swap.success => {
+                    // The swap unwraps wSOL as a side effect, closing the one
+                    // account every open position's SOL side resolves to. Put it
+                    // back immediately — leaving it missing is what made open
+                    // positions fail their next claim/close with
+                    // AccountNotInitialized.
+                    if let Err(e) = crate::tools::meteora_native::ensure_wsol_ata(config).await {
+                        warn(
+                            "executor",
+                            &format!("could not restore wSOL ATA after swap: {e}"),
+                        );
+                    }
                     if let Some(map) = close_result.as_object_mut() {
                         map.insert("autoSwapped".to_string(), Value::Bool(true));
                         if let Some(tx) = swap.tx {
@@ -2082,7 +2121,17 @@ impl ToolExecutor {
                         // fees are swept to SOL when the position finally closes.
                         let mut result = serde_json::to_value(&claim)?;
                         enrich_close_result_with_position_metadata(&mut result, args, positions);
-                        self.maybe_auto_swap_base_to_sol(&mut result, true, config)
+                        // Claimed fees arrive mostly as the base token, so their
+                        // value falls with it — a token that dumps takes the fee
+                        // cushion down with it, which is the cushion meant to
+                        // absorb the loss. Bank them into SOL while the token is
+                        // over-extended upward (the same %B signal the
+                        // over-extended take-profit uses), so the value is locked
+                        // in at a high rather than ridden back down. Outside a
+                        // pump the fees stay put: swapping mid-position costs
+                        // slippage and only pays off at a good price.
+                        let bank_now = should_bank_fees(&result, config).await;
+                        self.maybe_auto_swap_base_to_sol(&mut result, !bank_now, config)
                             .await?;
                         Ok(serde_json::to_string_pretty(&result)?)
                     }
