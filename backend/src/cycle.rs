@@ -186,7 +186,7 @@ pub async fn run_management_cycle(
             .map(|p| crate::tools::wallet::normalize_mint(&p.base_mint))
             .collect();
         let swept =
-            crate::tools::wallet::sweep_dust_to_sol(config, &keep, active.is_empty()).await;
+            crate::tools::wallet::sweep_dust_to_sol(config, &keep, true).await;
         if swept > 0 {
             info(
                 "cycle",

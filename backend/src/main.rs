@@ -607,7 +607,7 @@ async fn main() -> Result<()> {
                         let swept = crate::tools::wallet::sweep_dust_to_sol(
                             &config_pnl,
                             &keep,
-                            active_now.is_empty(),
+                            true,
                         )
                         .await;
                         if swept > 0 {

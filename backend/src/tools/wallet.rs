@@ -905,10 +905,12 @@ fn dust_sweep_gate() -> &'static std::sync::Mutex<Option<std::time::Instant>> {
 /// which is what produced the AccountNotInitialized failures. Anything else in
 /// the wallet is realized leftover from a closed position and is safe to sell.
 ///
-/// `unwrap_wsol` should only be true when no position is open. wSOL lives in a
-/// single account shared by every position's quote side, so unwrapping it is
-/// not safe to do alongside live positions even though the unwrap now recreates
-/// the account atomically.
+/// `unwrap_wsol` converts wrapped SOL back to native. It is safe to leave on
+/// with positions open: `unwrap_all_wsol` closes and recreates the shared wSOL
+/// account inside a single transaction, and Solana transactions are atomic, so
+/// no other transaction can observe it missing. Fees claimed from a live
+/// position arrive partly as wSOL, so gating this on a flat wallet left that
+/// SOL wrapped indefinitely — the bot almost always holds positions.
 pub async fn sweep_dust_to_sol(
     config: &Config,
     keep_mints: &std::collections::HashSet<String>,
