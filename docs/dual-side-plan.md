@@ -173,6 +173,22 @@ with it, or two processes fight over the same files:
 | health port | `HEALTH_PORT` | live uses 8080 |
 | process | its own pm2 name | `meridian-tele` is taken |
 
+The **Telegram bot is shared**, deliberately — one chat for both modes, no
+second token to set up. Only `getUpdates` is exclusive (a second long-poll
+gets 409 Conflict and the two steal each other's updates); `sendMessage` is
+not. So dual-side sets `MERIDIAN_TELEGRAM_COMMANDS=false` — it keeps sending
+its closes to the same chat and leaves `/status`, `/stop` and the rest to the
+live bot — and `MERIDIAN_INSTANCE_LABEL=dual` so its messages arrive tagged.
+The trade-off is that dual-side has no Telegram controls of its own; drive it
+from the dashboard or pm2.
+
+Both bots also share one Helius key and one LLM endpoint, and the live
+cadence is aggressive (`pnlPollIntervalSecs` 15, `screeningIntervalMin` 1).
+Doubling that load risks rate-limiting the LIVE bot, which is the measurement
+being protected — so run dual-side slower (screening 3–5 min, PnL poll 30s).
+It does not need single-side's reflexes: it is exposed from entry, there is
+no moment of price first entering the range to catch.
+
 `MERIDIAN_STATE_PATH` and `MERIDIAN_LOCK_PATH` are derived from
 `MERIDIAN_DATA_DIR` when unset, so setting the data dir is enough unless you
 want them somewhere else.

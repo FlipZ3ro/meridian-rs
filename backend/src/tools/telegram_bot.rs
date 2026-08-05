@@ -741,8 +741,6 @@ async fn portfolio_text(config: &Config, state_path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     /// The default must keep serving commands — only an explicit opt-out makes
     /// an instance notification-only, so the live bot is never silenced by a
     /// setting it does not know about.
