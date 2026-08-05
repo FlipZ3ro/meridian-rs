@@ -244,44 +244,9 @@ pub struct ManagementConfig {
     // stuck. Set false once the commons migration handles Token-2022.
     #[serde(default = "default_skip_token_2022")]
     pub skip_token_2022: bool,
-    // ── Dual-side deposits ───────────────────────────────────
-    // Single-side puts only SOL in bins BELOW the active one, so fees accrue
-    // only once price trades down into the range. Dual-side buys the base token
-    // first and sits around the active bin, earning from tick one — paying for
-    // it with directional exposure and IL from entry, plus the entry swap's
-    // slippage. Off by default: the live single-side baseline depends on it.
-    #[serde(default)]
-    pub dual_side_enabled: bool,
-    // Fraction of the deploy swapped SOL → base token. 0.5 is the balanced
-    // split; lower tilts the position back toward SOL.
-    #[serde(default = "default_dual_side_base_pct")]
-    pub dual_side_base_pct: f64,
-    #[serde(default = "default_dual_side_slippage_bps")]
-    pub dual_side_slippage_bps: u32,
-    // Dual-side needs bins on BOTH sides of the active bin — the token side
-    // has nowhere to sit otherwise. Sized here rather than reusing the
-    // single-side coverage math, whose downside-only range blows past the
-    // native path's 69-bin ceiling as soon as an upside half is added.
-    #[serde(default = "default_dual_side_bins_below")]
-    pub dual_side_bins_below: i64,
-    #[serde(default = "default_dual_side_bins_above")]
-    pub dual_side_bins_above: i64,
     // ── Display mode ─────────────────────────────────────────
     #[serde(default)]
     pub sol_mode: bool,
-}
-
-fn default_dual_side_base_pct() -> f64 {
-    0.5
-}
-fn default_dual_side_slippage_bps() -> u32 {
-    100
-}
-fn default_dual_side_bins_below() -> i64 {
-    30
-}
-fn default_dual_side_bins_above() -> i64 {
-    30
 }
 
 fn default_skip_token_2022() -> bool {
@@ -804,11 +769,6 @@ impl Default for Config {
                 exit_bb_upper_pctb: default_exit_bb_upper_pctb(),
                 exit_min_profit_pct: 0.0,
                 skip_token_2022: default_skip_token_2022(),
-                dual_side_enabled: false,
-                dual_side_base_pct: default_dual_side_base_pct(),
-                dual_side_slippage_bps: default_dual_side_slippage_bps(),
-                dual_side_bins_below: default_dual_side_bins_below(),
-                dual_side_bins_above: default_dual_side_bins_above(),
                 sol_mode: false,
             },
             risk: RiskConfig {
