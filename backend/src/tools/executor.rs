@@ -865,6 +865,28 @@ impl ToolExecutor {
                 if args["amount"].as_f64().is_some_and(|a| a < 0.0) {
                     anyhow::bail!("amount must not be negative");
                 }
+                // Never sell the base token of a position that is still open:
+                // the swap closes the token account that position's claim and
+                // close need, which is what produces AccountNotInitialized and
+                // leaves it stuck. The periodic dust sweep already excludes
+                // these via keep_mints, but the agent calls swap_token directly
+                // (its prompt tells it to sweep leftovers after a close) and had
+                // no such guard — it only ever appeared safe because the broken
+                // from_mint/to_mint validation was rejecting every one of its
+                // swaps before they ran.
+                let normalized = normalize_mint(from);
+                if let Some(pos) = positions
+                    .get_active()
+                    .iter()
+                    .find(|p| normalize_mint(&p.base_mint) == normalized)
+                {
+                    anyhow::bail!(
+                        "{} is the base token of an open position ({}) — refusing to swap it; \
+                         it would break that position's claim/close",
+                        &normalized[..8.min(normalized.len())],
+                        pos.pool_name.as_deref().unwrap_or("unknown pool")
+                    );
+                }
                 Ok(())
             }
             _ => Ok(()),
