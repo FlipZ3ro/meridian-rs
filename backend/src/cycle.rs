@@ -486,7 +486,16 @@ pub async fn run_pnl_poll(
                 // The PnL API exposes no SOL figure on this endpoint, so derive
                 // it from the deployed principal — good enough for close records
                 // and loss cooldowns, and consistent with amount_sol accounting.
-                pos.pnl_sol = Some(pos.amount_sol * pct / 100.0);
+                // Positions adopted from chain after a restart carry no deploy
+                // record, so fall back to the configured deploy size rather than
+                // multiplying by a 0.0 principal (which yielded pnl_sol = -0.0
+                // and made every close record look flat).
+                let principal_sol = if pos.amount_sol > 0.0 {
+                    pos.amount_sol
+                } else {
+                    config.management.deploy_amount_sol
+                };
+                pos.pnl_sol = Some(principal_sol * pct / 100.0);
             }
             if snapshot.pnl_usd.is_some() {
                 pos.pnl_usd = snapshot.pnl_usd;

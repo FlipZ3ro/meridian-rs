@@ -162,6 +162,11 @@ async fn reconcile_positions_on_chain(
                     pool_name: pool_name.clone(),
                     base_mint,
                     created_at: chrono::Utc::now().to_rfc3339(),
+                    // An adopted position has no deploy record to read the
+                    // principal from, and leaving it 0.0 made every SOL-denominated
+                    // figure derived from it collapse to zero. The bot always
+                    // deploys the configured size, so use it as the estimate.
+                    amount_sol: config.management.deploy_amount_sol,
                     volatility: em.volatility,
                     fee_tvl_ratio: em.fee_tvl_ratio,
                     organic_score: em.organic_score,
