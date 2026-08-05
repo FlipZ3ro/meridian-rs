@@ -1382,9 +1382,13 @@ h3 { font-size: 15px; }
     radial-gradient(1200px 600px at 50% -10%, rgba(155,124,255,0.18), transparent 60%),
     linear-gradient(180deg, #070d16, #0a1320);
 }
+/* Same wallpaper the desktop shell uses. This pointed at /wallpaper.jpg, which
+   has never existed in public/ — so the overlay rendered blank and every page
+   load fetched a 404, including on the brief "checking" screen AuthGate shows
+   before the session lookup returns. */
 .lock-screen::before {
   content: ''; position: absolute; inset: 0;
-  background: url('/wallpaper.jpg') center/cover no-repeat;
+  background: url('/wallpaper-anime-moon.jpg') center/cover no-repeat;
   opacity: 0.18; filter: blur(8px) saturate(1.1);
 }
 .lock-clock { position: relative; text-align: center; color: #e8edf7; }
