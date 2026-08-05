@@ -565,16 +565,26 @@ impl ToolExecutor {
                     }
                 }
 
-                // Pool cooldown check
-                if pool_memory.is_on_cooldown(pool_addr) {
+                // Pool cooldown check. MUST use is_pool_on_cooldown: the
+                // `is_on_cooldown` alias resolves to is_base_mint_on_cooldown,
+                // which compares its argument against each entry's base_mint — so
+                // passing a POOL address there could never match and this gate was
+                // a permanent no-op. Every cooldown the bot wrote went unenforced,
+                // which is how CATE was redeployed 3 minutes after stopping out
+                // and FROGE 6 minutes after its pool was cooled down.
+                if pool_memory.is_pool_on_cooldown(pool_addr) {
                     anyhow::bail!(
                         "pool {} is on cooldown — recently closed at loss",
                         &pool_addr[..12.min(pool_addr.len())]
                     );
                 }
-                // Token cooldown check (check base_mint)
-                if let Some(base_mint) = args["base_mint"].as_str() {
-                    if !base_mint.is_empty() && pool_memory.is_on_cooldown(base_mint) {
+                // Token cooldown check. Uses the base mint already resolved above
+                // (from the pool when absent from args) rather than reading
+                // args["base_mint"] directly — the screener's deploy_position
+                // passes only pool_address, so keying off args silently skipped
+                // this gate on exactly the path that opens most positions.
+                if let Some(base_mint) = dup_base_mint.as_deref() {
+                    if !base_mint.is_empty() && pool_memory.is_base_mint_on_cooldown(base_mint) {
                         anyhow::bail!(
                             "token {} is on cooldown",
                             &base_mint[..12.min(base_mint.len())]
