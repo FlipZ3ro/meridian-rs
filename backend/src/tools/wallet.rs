@@ -856,9 +856,21 @@ fn dust_sweep_gate() -> &'static std::sync::Mutex<Option<std::time::Instant>> {
 /// `DUST_SWEEP_COOLDOWN_SECS`. Returns the number of tokens swapped.
 ///
 /// Respects dry-run via `swap_token` (no real tx in DRY_RUN).
+/// Sweep leftover tokens back to SOL.
+///
+/// `keep_mints` must contain the base mint of every OPEN position: swapping one
+/// of those destroys the token account that position's claim and close need,
+/// which is what produced the AccountNotInitialized failures. Anything else in
+/// the wallet is realized leftover from a closed position and is safe to sell.
+///
+/// `unwrap_wsol` should only be true when no position is open. wSOL lives in a
+/// single account shared by every position's quote side, so unwrapping it is
+/// not safe to do alongside live positions even though the unwrap now recreates
+/// the account atomically.
 pub async fn sweep_dust_to_sol(
     config: &Config,
     keep_mints: &std::collections::HashSet<String>,
+    unwrap_wsol: bool,
 ) -> usize {
     // Throttle: bail if we swept recently. Lock is dropped before any await.
     {
@@ -914,7 +926,7 @@ pub async fn sweep_dust_to_sol(
         .tokens
         .iter()
         .any(|t| normalize_mint(&t.mint) == SOL_MINT && t.balance > 0.0);
-    if has_wsol {
+    if has_wsol && unwrap_wsol {
         match crate::tools::meteora_native::unwrap_all_wsol(config).await {
             Ok(Some(_)) => {
                 crate::utils::logger::module::info("dust", "unwrapped residual wSOL → native SOL");

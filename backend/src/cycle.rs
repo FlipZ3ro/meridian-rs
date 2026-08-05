@@ -173,9 +173,18 @@ pub async fn run_management_cycle(
     // AccountNotInitialized (user_token_y). Per-close unwrap + auto-swap already
     // handle each closed position's residual, so this flat-only sweep is just the
     // backstop for late fee-claim inflows / adopted-position leftovers.
-    if active.is_empty() {
-        let keep: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let swept = crate::tools::wallet::sweep_dust_to_sol(config, &keep).await;
+    {
+        // Protect the base mint of every open position — selling one of those
+        // destroys the token account its claim and close need. Everything else
+        // is realized leftover and should be swept, which the previous
+        // flat-wallet-only gate never did: the bot almost always holds
+        // positions, so leftovers accumulated indefinitely.
+        let keep: std::collections::HashSet<String> = active
+            .iter()
+            .map(|p| crate::tools::wallet::normalize_mint(&p.base_mint))
+            .collect();
+        let swept =
+            crate::tools::wallet::sweep_dust_to_sol(config, &keep, active.is_empty()).await;
         if swept > 0 {
             info(
                 "cycle",

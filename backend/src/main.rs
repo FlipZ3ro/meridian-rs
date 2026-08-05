@@ -539,10 +539,16 @@ async fn main() -> Result<()> {
                     // AccountNotInitialized (user_token_y). Per-close unwrap already
                     // frees each closed position's wSOL principal, so gating the
                     // periodic sweep on flat costs nothing but eliminates the race.
-                    if positions.get_active().is_empty() {
+                    {
+                        let active_now = positions.get_active();
+                        let keep: std::collections::HashSet<String> = active_now
+                            .iter()
+                            .map(|p| crate::tools::wallet::normalize_mint(&p.base_mint))
+                            .collect();
                         let swept = crate::tools::wallet::sweep_dust_to_sol(
                             &config_pnl,
-                            &std::collections::HashSet::new(),
+                            &keep,
+                            active_now.is_empty(),
                         )
                         .await;
                         if swept > 0 {
