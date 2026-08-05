@@ -73,6 +73,7 @@ Treat this as the main body of work. Steps 1 and 2 are mechanical.
 
 - Deploy this branch to vps3 while the single-side baseline is running.
 - Change `master` — it is what the live bot runs.
+- **Run dual-side on the live bot's wallet.** It gets its own — see below.
 - Delete or edit `/root/.meridian-keys/tele-bot.json` (wallet key, backed up
   by the operator) or the live `.env` / `user-config.json` on vps3.
 
@@ -150,6 +151,34 @@ baseline is retuned, which a fixed second set would not.
 `dualSideThresholdMult` is a hypothesis, not a measurement. The honest
 sequence is: let the single-side baseline finish, then run dual-side over a
 comparable window on comparable pools, then set these from what comes back.
+
+## Dual-side runs on its own wallet
+
+Operator's call, 2026-08-06: dual-side does not share the live bot's wallet
+(`3k7tWvC9ZnfFjASwb8zJn43E4pF1oi68sXX1cy2hBEGq`). Not only for safety — a
+shared wallet makes the comparison unreadable. One SOL balance funds both
+modes, `sweep_dust_to_sol` sees both modes' leftovers, `keep_mints` spans both
+sets of open positions, and the entry swap's slippage lands in a balance the
+single-side baseline is being measured on. The whole point of the baseline is
+one clean number per mode.
+
+A separate wallet is not enough on its own — the runtime state has to split
+with it, or two processes fight over the same files:
+
+| What | How | Why it has to differ |
+|---|---|---|
+| signing key | `WALLET_PRIVATE_KEY` (a keypair FILE PATH is accepted) | the point |
+| all runtime state | `MERIDIAN_DATA_DIR` | one setting covers state, lock, pool memory, lessons, blacklist, decision log, strategy library, signal weights — the lock alone would stop the second process from starting, and shared pool memory would cross-contaminate both modes' cooldowns and learning |
+| web/HyperOS port | `MERIDIAN_WEB_ADDR` | live uses 3101 |
+| health port | `HEALTH_PORT` | live uses 8080 |
+| process | its own pm2 name | `meridian-tele` is taken |
+
+`MERIDIAN_STATE_PATH` and `MERIDIAN_LOCK_PATH` are derived from
+`MERIDIAN_DATA_DIR` when unset, so setting the data dir is enough unless you
+want them somewhere else.
+
+Generating and funding that wallet is the operator's job — this repo never
+handles key material, only a path to it.
 
 ## Background worth reading
 
