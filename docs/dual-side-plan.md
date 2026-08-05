@@ -121,7 +121,35 @@ live entry can leave the wallet holding the token if the deposit then fails.
 balance appears, but the recovery itself is manual.
 
 Before this runs live it still needs one real small-size entry (~0.05 SOL) to
-exercise the swap leg, and step 3.
+exercise the swap leg.
+
+### Step 3 — the exit ladder, as a mode switch
+
+`ExitThresholds` resolves the ladder per position instead of reading config
+directly. Which set applies is recorded on the position at deploy
+(`TrackedPosition.dual_side`), not read from config when it exits — flipping
+the switch must not retune positions already in flight.
+
+The dual-side set scales what reacts to price by one `dualSideThresholdMult`
+rather than introducing a second set of numbers, because the numbers are not
+independently known. 2.0 is the exposure ratio at `basePct` 0.5: half the
+position is the token from entry, so early on PnL moves about twice as far per
+unit of token move. Scaling also keeps both modes in step when the single-side
+baseline is retuned, which a fixed second set would not.
+
+| Threshold | Single-side | Dual-side | Why |
+|---|---|---|---|
+| stop loss | −6% | ×mult | −6% is a ~12% token move — an ordinary candle |
+| OOR close loss | −4% | ×mult | reached on volatility, not a structural break |
+| safety-exit trigger | −8% | ×mult | same drawdown curve, twice the amplitude |
+| trailing arm / drop | 6 / 3 | ×mult | +6% is tripped by noise |
+| OOR wait | 8 min | **unchanged** | it measures price being outside the range — the same clock in both modes |
+| pumped-above buffer | 50 bins | 10 bins | differs in kind: dual-side sold its whole token side into the rally and now earns nothing out of range, where single-side ended all-SOL with no IL |
+| over-extension min profit | 2.0% | 4.0% | dual-side pays a swap in and another out |
+
+`dualSideThresholdMult` is a hypothesis, not a measurement. The honest
+sequence is: let the single-side baseline finish, then run dual-side over a
+comparable window on comparable pools, then set these from what comes back.
 
 ## Background worth reading
 
