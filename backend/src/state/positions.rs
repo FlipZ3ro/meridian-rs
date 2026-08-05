@@ -234,7 +234,7 @@ pub struct RecentEvent {
 
 // ─── Position State ─────────────────────────────────────────────
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PositionState {
     pub positions: HashMap<String, TrackedPosition>,
     #[serde(default)]
@@ -267,6 +267,48 @@ impl PositionState {
             fs::create_dir_all(parent)?;
         }
 
+        // Four independent tasks (pnl poll, management, screening, brief) each
+        // load this whole file, mutate their own copy, and save it back. A plain
+        // overwrite is therefore last-writer-wins: a task holding a snapshot from
+        // before a deploy would erase the position the executor had just added.
+        // Reconcile then re-adopted it from chain with a fresh `created_at`,
+        // which silently reset every time-based exit — position age, the
+        // out-of-range timer, and the trailing peak — roughly every management
+        // cycle. That produced 179 adoptions and 244 prunes in a single day, one
+        // position being re-adopted 49 times.
+        //
+        // Merging under the same lock closes that window without a global state
+        // lock, which is not viable here: the management cycle holds its copy
+        // across minutes-long LLM calls and would stall the 15s poller.
+        //
+        // Entries this instance knows about win (it is the one making changes);
+        // entries only on disk are preserved, because their absence here means
+        // "never seen", not "deleted" — PositionState::remove has no production
+        // callers, closes go through mark_orphaned, which keeps the entry.
+        let merged = match Self::load(path) {
+            Ok(mut disk) if !disk.positions.is_empty() => {
+                let preserved: Vec<String> = disk
+                    .positions
+                    .keys()
+                    .filter(|id| !self.positions.contains_key(*id))
+                    .cloned()
+                    .collect();
+                if !preserved.is_empty() {
+                    tracing::debug!(
+                        count = preserved.len(),
+                        "state save: preserving positions added by another task"
+                    );
+                }
+                for (id, pos) in &self.positions {
+                    disk.positions.insert(id.clone(), pos.clone());
+                }
+                disk.recent_events = self.recent_events.clone();
+                disk.last_updated = self.last_updated.clone();
+                disk
+            }
+            _ => self.clone(),
+        };
+
         let temp_path = target.with_extension(format!(
             "tmp-{}",
             SystemTime::now()
@@ -274,7 +316,7 @@ impl PositionState {
                 .unwrap_or_default()
                 .as_nanos()
         ));
-        fs::write(&temp_path, serde_json::to_string_pretty(self)?)?;
+        fs::write(&temp_path, serde_json::to_string_pretty(&merged)?)?;
         if target.exists() {
             fs::remove_file(target)?;
         }
