@@ -249,8 +249,12 @@ async fn notify_close_to_telegram(
     let pool = pos.pool_name.as_deref().unwrap_or("unknown");
     let fees = pos.all_time_fees_usd.unwrap_or(0.0);
     let pnl_usd = pos.pnl_usd.unwrap_or(0.0);
+    // Markdown, not HTML: send_message uses parse_mode "Markdown", so HTML tags
+    // render literally. send_message_safe falls back to plain text if a pool
+    // name ever contains characters Markdown chokes on, so the message still
+    // arrives — unformatted rather than not at all.
     let text = format!(
-        "{} <b>{}</b>\n{}\n\nPnL: <b>{:+.2}%</b> ({:+.4} SOL / {:+.2} USD)\nFees: {:.2} USD\n<b>Net: {:+.2} USD</b>",
+        "{} *{}*\n_{}_\n\nPnL: *{:+.2}%*  ({:+.4} SOL · {:+.2} USD)\nFees: +{:.2} USD\n\n*Net: {:+.2} USD*",
         if is_risk_cut { "🛑" } else { "✅" },
         pool,
         reason,
