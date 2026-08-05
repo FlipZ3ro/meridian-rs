@@ -746,10 +746,10 @@ pub async fn close_position_commons(
     let (bitmap_extension_pda, _) = commons::derive_bin_array_bitmap_extension(lb_pair);
     // The bitmap extension only exists for pairs wide enough to need it; the
     // program expects its own id as the "absent" sentinel.
-    let bin_array_bitmap_extension = match rpc.get_account(&bitmap_extension_pda).await {
+    let bin_array_bitmap_extension = Some(match rpc.get_account(&bitmap_extension_pda).await {
         Ok(_) => bitmap_extension_pda,
         Err(_) => commons::dlmm::ID,
-    };
+    });
 
     let mut signatures: Vec<String> = Vec::new();
 
