@@ -217,6 +217,7 @@ pub enum CliCommand {
         bins_below: Option<i64>,
         bins_above: Option<i64>,
         strategy: Option<String>,
+        dual_side: bool,
         confirm: bool,
     },
     Close {
@@ -281,6 +282,8 @@ pub fn help_text() -> String {
         "  meridian candidates [--limit <n>]",
         "  meridian study --pool <addr> [--limit <n>]",
         "  meridian deploy --pool <pool> --amount <sol> [--bins-below <n>] [--bins-above <n>] [--strategy spot|curve|bid_ask] [--dry-run]",
+        "  meridian deploy-commons --pool <pool> --amount-sol <sol> [--bins-below <n>] [--bins-above <n>] [--strategy spot|curve|bid_ask] [--dual-side] [--confirm]",
+        "    (simulates by default — nothing is sent, and no entry swap is made, without --confirm)",
         "  meridian claim --position <position>",
         "  meridian close --position <position> [--reason <text>] [--skip-swap]",
         "  meridian swap --from <mint> --amount <tokens>",
@@ -389,6 +392,7 @@ pub fn parse_cli_args(args: &[String]) -> Result<Option<CliCommand>> {
                 .map(|v| v.parse())
                 .transpose()?,
             strategy: optional_flag(tail, &["--strategy"]),
+            dual_side: has_flag(tail, "--dual-side"),
             confirm: has_flag(tail, "--confirm"),
         })),
         "claim-commons" => Ok(Some(CliCommand::ClaimCommons {
@@ -1532,15 +1536,31 @@ pub async fn run_cli_command(
             bins_below,
             bins_above,
             strategy,
+            dual_side,
             confirm,
         } => {
+            // `--dual-side` forces it on for a one-off run; otherwise the
+            // configured mode applies, so the CLI rehearses what the bot does.
+            let dual_side = dual_side || config.management.dual_side_enabled;
+            // Dual-side needs an upside half; single-side deliberately has none.
+            let default_bins_above = if dual_side {
+                config.management.dual_side_bins_above
+            } else {
+                0
+            };
+            let default_bins_below = if dual_side {
+                config.management.dual_side_bins_below
+            } else {
+                20
+            };
             let outcome = crate::tools::meteora_native::deploy_position_commons(
                 &pool,
                 amount_sol,
-                bins_below.unwrap_or(20),
-                bins_above.unwrap_or(0),
+                bins_below.unwrap_or(default_bins_below),
+                bins_above.unwrap_or(default_bins_above),
                 strategy.as_deref().unwrap_or("spot"),
                 config,
+                dual_side,
                 !confirm,
             )
             .await?;
@@ -1552,6 +1572,13 @@ pub async fn run_cli_command(
                 "binRange": [outcome.min_bin_id, outcome.max_bin_id],
                 "unitsConsumed": outcome.units_consumed,
                 "error": outcome.error,
+                "dualSide": outcome.dual_side,
+                "strategyType": outcome.strategy_type,
+                "amountX": outcome.amount_x,
+                "amountY": outcome.amount_y,
+                "baseMint": outcome.base_mint,
+                "entrySwapSignature": outcome.entry_swap_signature,
+                "entryNote": outcome.entry_note,
                 // Only the tail matters — the program's own verdict.
                 "logs": outcome.logs.iter().rev().take(12).rev().collect::<Vec<_>>(),
             })))

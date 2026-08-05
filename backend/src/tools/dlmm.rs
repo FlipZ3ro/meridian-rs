@@ -932,7 +932,15 @@ pub async fn deploy_position(
 ) -> Result<DeployResult> {
     let pool_address = crate::tools::wallet::normalize_mint(pool_address);
 
-    let bins_above_val = bins_above.unwrap_or(0);
+    let dual_side = config.management.dual_side_enabled;
+    // Single-side deliberately has no upside half — it deposits SOL below the
+    // active bin and waits for price to come down. Dual-side sits around the
+    // active bin and needs bins on both sides for the base token to occupy.
+    let bins_above_val = bins_above.unwrap_or(if dual_side {
+        config.management.dual_side_bins_above
+    } else {
+        0
+    });
     let strategy_str = strategy.unwrap_or("spot");
 
     // ─── Fetch active bin and pool info first ─────────────────────
@@ -983,13 +991,32 @@ pub async fn deploy_position(
     // so the downside range covers a consistent fraction of price
     // (config.strategy.target_downside_pct) instead of a flat bin count that
     // goes out-of-range fast on tight, low-bin_step pools.
-    let bins_below_val =
-        bins_below.unwrap_or_else(|| coverage_based_bins_below(bin_step, &config.strategy));
+    // Dual-side is sized from its own knobs rather than the coverage math: that
+    // math targets a downside-only range (target_downside_pct) and its bin count
+    // clears the native path's 69-bin ceiling as soon as an upside half is added.
+    let bins_below_val = bins_below.unwrap_or_else(|| {
+        if dual_side {
+            config.management.dual_side_bins_below
+        } else {
+            coverage_based_bins_below(bin_step, &config.strategy)
+        }
+    });
     let total_bins = bins_below_val + bins_above_val;
     let is_wide_range = total_bins > 69;
 
+    // Under dual-side part of the deposit is spent buying the base token, so
+    // only the remainder goes in as SOL. The token units it buys aren't known
+    // until the swap fills, which is why amount_x stays unreported here.
+    let sol_for_base = if dual_side {
+        amount_sol * config.management.dual_side_base_pct
+    } else {
+        0.0
+    };
+    let sol_side = amount_sol - sol_for_base;
+    let deposit_amount_x = if dual_side { None } else { Some(0.0) };
+
     tracing::info!(
-        "deploy_position: pool={} amount_sol={:.4} bins=[{}, {}] bin_step={:?} strategy={} wide_range={}",
+        "deploy_position: pool={} amount_sol={:.4} bins=[{}, {}] bin_step={:?} strategy={} wide_range={} dual_side={} sol_for_base={:.4}",
         &pool_address[..8.min(pool_address.len())],
         amount_sol,
         bins_below_val,
@@ -997,6 +1024,8 @@ pub async fn deploy_position(
         bin_step,
         strategy_str,
         is_wide_range,
+        dual_side,
+        sol_for_base,
     );
 
     let min_bin_id = active_bin.bin_id - bins_below_val as i32;
@@ -1024,7 +1053,11 @@ pub async fn deploy_position(
     // limit (>69 bins); otherwise it's omitted so callers don't misread a
     // normal deploy as rejected.
     let mut safety_check_list = vec![
-        "single_side_sol_only".to_string(),
+        if dual_side {
+            "dual_side_swaps_sol_to_base_before_deposit".to_string()
+        } else {
+            "single_side_sol_only".to_string()
+        },
         "native_path_does_not_initialize_bin_arrays".to_string(),
     ];
     if is_wide_range {
@@ -1052,16 +1085,26 @@ pub async fn deploy_position(
             base_fee,
             strategy: Some(strategy_str.to_string()),
             wide_range: Some(is_wide_range),
-            amount_x: Some(0.0),
-            amount_y: Some(amount_sol),
+            amount_x: deposit_amount_x,
+            amount_y: Some(sol_side),
             txs: None,
             error: None,
-            note: Some(format!(
-                "DRY RUN OK (simulated, not broadcast): all safety checks passed; would deploy \
-                 {:.4} SOL with {} bins below, {} bins above. This is a successful simulation — \
-                 no transaction was submitted.",
-                amount_sol, bins_below_val, bins_above_val,
-            )),
+            note: Some(if dual_side {
+                format!(
+                    "DRY RUN OK (simulated, not broadcast): all safety checks passed; would deploy \
+                     dual-side — swap {:.4} SOL into the base token, then deposit it alongside \
+                     {:.4} SOL across {} bins below and {} bins above. This is a successful \
+                     simulation — no swap and no transaction were submitted.",
+                    sol_for_base, sol_side, bins_below_val, bins_above_val,
+                )
+            } else {
+                format!(
+                    "DRY RUN OK (simulated, not broadcast): all safety checks passed; would deploy \
+                     {:.4} SOL with {} bins below, {} bins above. This is a successful simulation — \
+                     no transaction was submitted.",
+                    amount_sol, bins_below_val, bins_above_val,
+                )
+            }),
         });
     }
 
@@ -1084,8 +1127,8 @@ pub async fn deploy_position(
             base_fee,
             strategy: Some(strategy_str.to_string()),
             wide_range: Some(true),
-            amount_x: Some(0.0),
-            amount_y: Some(amount_sol),
+            amount_x: deposit_amount_x,
+            amount_y: Some(sol_side),
             txs: None,
             error: Some("Wide-range deploy (>69 bins) is not enabled in the Rust native path yet. JS original uses createExtendedEmptyPosition + addLiquidityByStrategyChunkable; refusing unsafe one-shot deploy.".to_string()),
             note: None,
@@ -1127,8 +1170,8 @@ pub async fn deploy_position(
                 base_fee,
                 strategy: Some(strategy_str.to_string()),
                 wide_range: Some(is_wide_range),
-                amount_x: Some(0.0),
-                amount_y: Some(amount_sol),
+                amount_x: deposit_amount_x,
+                amount_y: Some(sol_side),
                 txs: Some(vec![result.signature]),
                 error: None,
                 note: None,
@@ -1154,8 +1197,8 @@ pub async fn deploy_position(
                 base_fee,
                 strategy: Some(strategy_str.to_string()),
                 wide_range: Some(is_wide_range),
-                amount_x: Some(0.0),
-                amount_y: Some(amount_sol),
+                amount_x: deposit_amount_x,
+                amount_y: Some(sol_side),
                 txs: None,
                 error: Some(format!("Native Meteora deploy failed: {}", e)),
                 note: None,
