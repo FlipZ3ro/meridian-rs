@@ -11,8 +11,6 @@ use crate::cli::{parse_cli_args, run_cli_command, CliOutput};
 use crate::config::types::Config;
 use crate::utils::logger::module::{info, warn};
 use serde_json::Value;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use std::time::Duration;
 
 const TG_API: &str = "https://api.telegram.org";
