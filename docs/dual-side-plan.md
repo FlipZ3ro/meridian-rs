@@ -91,6 +91,38 @@ Add `--confirm` to send for real. Build on vps3 (`/root/meridian-build`,
 ~1 min incremental); vps2's disk is 55% full and Windows cannot build this tree
 (openssl).
 
+## Status — 2026-08-06
+
+Steps 1 and 2 are done on `feat/dual-side` and verified by simulation. Step 3
+is untouched and still needs a decision before anyone writes code.
+
+Dual-side is off by default (`management.dualSideEnabled`), so master's
+behaviour and the running baseline are unchanged. Its knobs:
+`dualSideBasePct` (0.5), `dualSideSlippageBps` (100), `dualSideBinsBelow` /
+`dualSideBinsAbove` (30/30 — its own range, because the single-side coverage
+math is downside-only and clears the 69-bin ceiling once a top half is added).
+
+What simulation proved, against the live `turtleneck-SOL` pool
+(`88jWdp2ns8JzyKbwTFxunsPmRMpgAAyX4eJmgSYBTXtD`, Token-2022, wallet already
+held 4.41e9 base units):
+
+| Run | Result |
+|---|---|
+| single-side, 0.05 SOL | `SpotImBalanced`, no error, 107,879 CU — unchanged |
+| dual-side, 0.05 SOL, bins 30/30 | `SpotBalanced`, no error, 372,237 CU, amount_x 4,410,933,375 + amount_y 0.025 SOL |
+| dual-side, `--bins-above 0` | refused, as intended |
+| Jupiter SOL → base quote | routes: 0.025 SOL → 6.43e9 units, price impact 0.017% |
+
+So the balanced strategy type is accepted (no `InvalidStrategyParameters`),
+liquidity lands on both sides, and the entry swap has a route. What simulation
+cannot cover: the swap and the deposit are two separate transactions, so a
+live entry can leave the wallet holding the token if the deposit then fails.
+`acquire_base_token` refuses to deposit blind when the SOL leaves and no
+balance appears, but the recovery itself is manual.
+
+Before this runs live it still needs one real small-size entry (~0.05 SOL) to
+exercise the swap leg, and step 3.
+
 ## Background worth reading
 
 `docs/wp-to-commons-migration-scope.md` — why Token-2022 pools go through the
