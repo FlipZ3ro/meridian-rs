@@ -819,10 +819,18 @@ pub fn get_deterministic_close_rule(
     if minutes_out_of_range >= config.management.out_of_range_wait_minutes {
         let dead_too_long = minutes_out_of_range
             >= config.management.out_of_range_wait_minutes * OOR_MAX_HOLD_MULT;
-        if pnl_pct <= OOR_CLOSE_LOSS_PCT || dead_too_long {
+        // Out of range AND meaningfully in profit means price ran up through
+        // the range and out the top: the base token was sold back into SOL on
+        // the way, so the position is all SOL, sitting above its bins, earning
+        // nothing. Waiting out the full dead-hold only pays if price falls back
+        // into range — which would re-buy the token and give the gain back.
+        // Bank it at the normal wait mark and put the capital to work instead.
+        let banked_above_range = pnl_pct >= config.management.exit_min_profit_pct;
+        if pnl_pct <= OOR_CLOSE_LOSS_PCT || banked_above_range || dead_too_long {
             return Some(CloseRule::OutOfRange);
         }
-        // else: OOR but recoverable (near breakeven) — hold for the bounce.
+        // else: OOR near breakeven — could be either side of the range, so hold
+        // for the bounce rather than crystallising nothing.
     }
 
     // ── Rule 5: Low Yield ────────────────────────────────────────
