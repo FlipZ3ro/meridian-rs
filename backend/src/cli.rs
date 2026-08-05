@@ -199,6 +199,10 @@ pub enum CliCommand {
     Claim {
         position: String,
     },
+    /// Read-only: report the account set the commons claim path would use.
+    ClaimPreview {
+        position: String,
+    },
     Close {
         position: String,
         reason: Option<String>,
@@ -355,6 +359,10 @@ pub fn parse_cli_args(args: &[String]) -> Result<Option<CliCommand>> {
                 .transpose()?,
             strategy: optional_flag(tail, &["--strategy"]),
             dry_run: has_flag(tail, "--dry-run"),
+        })),
+        "claim-preview" => Ok(Some(CliCommand::ClaimPreview {
+            position: required_flag(tail, &["--position", "--position-address"])?
+                .ok_or_else(|| anyhow!("claim-preview requires --position <position>"))?,
         })),
         "claim" => Ok(Some(CliCommand::Claim {
             position: required_flag(tail, &["--position", "--position-address"])?
@@ -666,6 +674,7 @@ pub fn command_name(command: &CliCommand) -> &'static str {
         CliCommand::Manage { .. } => "manage",
         CliCommand::Deploy { .. } => "deploy",
         CliCommand::Claim { .. } => "claim",
+        CliCommand::ClaimPreview { .. } => "claim-preview",
         CliCommand::Close { .. } => "close",
         CliCommand::Swap { .. } => "swap",
     }
@@ -1476,6 +1485,9 @@ pub async fn run_cli_command(
         CliCommand::Claim { position } => {
             json_command_result("claim", claim_fees(&position, config).await?)
         }
+        CliCommand::ClaimPreview { position } => Ok(CliOutput::Json(
+            crate::tools::meteora_native::claim_fee_accounts_preview(&position, config).await?,
+        )),
         CliCommand::Close {
             position,
             reason,

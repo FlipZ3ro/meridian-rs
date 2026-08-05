@@ -557,8 +557,6 @@ pub async fn claim_fees_commons(
     config: &Config,
 ) -> Result<NativeClaimResult> {
     use anchor_lang::{InstructionData, ToAccountMetas};
-    use commons::dlmm::accounts::{LbPair as CLbPair, PositionV2};
-    use commons::extensions::lb_pair::LbPairExtension;
     use commons::extensions::position::PositionExtension;
     use solana_client::nonblocking::rpc_client::RpcClient as RpcClientV2;
     use solana_sdk::instruction::Instruction as InstructionV2;
@@ -569,32 +567,19 @@ pub async fn claim_fees_commons(
     let secret = wallet_secret_from_env()?;
     let keypair = keypair_v2_from_secret(&secret)?;
     let payer = keypair.pubkey();
-    let position_pk =
-        PubkeyV2::from_str(position_address).map_err(|e| anyhow!("invalid position: {}", e))?;
     let rpc = RpcClientV2::new(resolve_rpc_url(config));
-
-    let position_account = rpc.get_account(&position_pk).await?;
-    let position_state: PositionV2 = commons::pod_read_unaligned_skip_disc(&position_account.data)
-        .map_err(|e| anyhow!("decode PositionV2: {}", e))?;
-
-    let pair_account = rpc.get_account(&position_state.lb_pair).await?;
-    let lb_pair_state: CLbPair = commons::pod_read_unaligned_skip_disc(&pair_account.data)
-        .map_err(|e| anyhow!("decode LbPair: {}", e))?;
-
-    // Fees land in ATAs owned by fee_owner when the position sets one; the
-    // default (all-zero) pubkey means the payer receives them.
-    let fee_recipient = if position_state.fee_owner == PubkeyV2::default() {
-        payer
-    } else {
-        position_state.fee_owner
-    };
-
-    let [token_program_x, token_program_y] = lb_pair_state
-        .get_token_programs()
-        .map_err(|e| anyhow!("resolve token programs from lb_pair: {}", e))?;
-
-    let user_token_x = derive_ata_v2(&fee_recipient, &lb_pair_state.token_x_mint, &token_program_x);
-    let user_token_y = derive_ata_v2(&fee_recipient, &lb_pair_state.token_y_mint, &token_program_y);
+    let plan = resolve_claim_accounts(position_address, config).await?;
+    let ClaimAccountsPlan {
+        position_pk,
+        position_state,
+        lb_pair_state,
+        fee_recipient,
+        token_program_x,
+        token_program_y,
+        user_token_x,
+        user_token_y,
+        ..
+    } = plan;
 
     // Create whichever destination ATAs are missing, in one transaction, before
     // the claim. CreateIdempotent is a no-op when the account already exists.
@@ -612,6 +597,7 @@ pub async fn claim_fees_commons(
             ));
         }
     }
+    let _ = PubkeyV2::default();
     if !setup_ixs.is_empty() {
         let blockhash = rpc.get_latest_blockhash().await?;
         let tx =
@@ -683,6 +669,119 @@ pub async fn claim_fees_commons(
         claimable_fee_x: quote.fee_x,
         claimable_fee_y: quote.fee_y,
     })
+}
+
+/// Everything `claim_fees_commons` needs to build its instruction, resolved
+/// from chain. Kept as one struct so the read-only preview and the real claim
+/// share a single resolution path — a preview computed by parallel code could
+/// drift from what actually gets signed.
+struct ClaimAccountsPlan {
+    position_pk: solana_sdk::pubkey::Pubkey,
+    position_state: commons::dlmm::accounts::PositionV2,
+    lb_pair_state: commons::dlmm::accounts::LbPair,
+    fee_recipient: solana_sdk::pubkey::Pubkey,
+    token_program_x: solana_sdk::pubkey::Pubkey,
+    token_program_y: solana_sdk::pubkey::Pubkey,
+    user_token_x: solana_sdk::pubkey::Pubkey,
+    user_token_y: solana_sdk::pubkey::Pubkey,
+    payer: solana_sdk::pubkey::Pubkey,
+}
+
+async fn resolve_claim_accounts(
+    position_address: &str,
+    config: &Config,
+) -> Result<ClaimAccountsPlan> {
+    use commons::dlmm::accounts::{LbPair as CLbPair, PositionV2};
+    use commons::extensions::lb_pair::LbPairExtension;
+    use solana_client::nonblocking::rpc_client::RpcClient as RpcClientV2;
+    use solana_sdk::pubkey::Pubkey as PubkeyV2;
+    use solana_sdk::signature::Signer as SignerV2;
+
+    let payer = keypair_v2_from_secret(&wallet_secret_from_env()?)?.pubkey();
+    let position_pk =
+        PubkeyV2::from_str(position_address).map_err(|e| anyhow!("invalid position: {}", e))?;
+    let rpc = RpcClientV2::new(resolve_rpc_url(config));
+
+    let position_account = rpc.get_account(&position_pk).await?;
+    let position_state: PositionV2 = commons::pod_read_unaligned_skip_disc(&position_account.data)
+        .map_err(|e| anyhow!("decode PositionV2: {}", e))?;
+
+    let pair_account = rpc.get_account(&position_state.lb_pair).await?;
+    let lb_pair_state: CLbPair = commons::pod_read_unaligned_skip_disc(&pair_account.data)
+        .map_err(|e| anyhow!("decode LbPair: {}", e))?;
+
+    // Fees land in ATAs owned by fee_owner when the position sets one; the
+    // default (all-zero) pubkey means the payer receives them.
+    let fee_recipient = if position_state.fee_owner == PubkeyV2::default() {
+        payer
+    } else {
+        position_state.fee_owner
+    };
+
+    let [token_program_x, token_program_y] = lb_pair_state
+        .get_token_programs()
+        .map_err(|e| anyhow!("resolve token programs from lb_pair: {}", e))?;
+
+    let user_token_x = derive_ata_v2(&fee_recipient, &lb_pair_state.token_x_mint, &token_program_x);
+    let user_token_y = derive_ata_v2(&fee_recipient, &lb_pair_state.token_y_mint, &token_program_y);
+
+    Ok(ClaimAccountsPlan {
+        position_pk,
+        position_state,
+        lb_pair_state,
+        fee_recipient,
+        token_program_x,
+        token_program_y,
+        user_token_x,
+        user_token_y,
+        payer,
+    })
+}
+
+/// Read-only diagnostic: report exactly which accounts `claim_fees_commons`
+/// would pass, and whether each destination token account currently exists on
+/// chain. Signs nothing and sends nothing — this is the safe way to compare the
+/// commons account set against the one wp resolves internally before trusting
+/// it with a real claim.
+pub async fn claim_fee_accounts_preview(
+    position_address: &str,
+    config: &Config,
+) -> Result<serde_json::Value> {
+    use solana_client::nonblocking::rpc_client::RpcClient as RpcClientV2;
+    use solana_sdk::pubkey::Pubkey as PubkeyV2;
+
+    let plan = resolve_claim_accounts(position_address, config).await?;
+    let rpc = RpcClientV2::new(resolve_rpc_url(config));
+    let exists = |a: &PubkeyV2| {
+        let rpc = &rpc;
+        async move { rpc.get_account(a).await.is_ok() }
+    };
+    let x_exists = exists(&plan.user_token_x).await;
+    let y_exists = exists(&plan.user_token_y).await;
+    let chunks = position_bin_range_chunks(
+        plan.position_state.lower_bin_id,
+        plan.position_state.upper_bin_id,
+    );
+
+    Ok(serde_json::json!({
+        "position": plan.position_pk.to_string(),
+        "lbPair": plan.position_state.lb_pair.to_string(),
+        "payer": plan.payer.to_string(),
+        "feeOwnerRaw": plan.position_state.fee_owner.to_string(),
+        "feeOwnerIsDefault": plan.position_state.fee_owner == PubkeyV2::default(),
+        "feeRecipient": plan.fee_recipient.to_string(),
+        "tokenXMint": plan.lb_pair_state.token_x_mint.to_string(),
+        "tokenYMint": plan.lb_pair_state.token_y_mint.to_string(),
+        "tokenProgramX": plan.token_program_x.to_string(),
+        "tokenProgramY": plan.token_program_y.to_string(),
+        "userTokenX": plan.user_token_x.to_string(),
+        "userTokenY": plan.user_token_y.to_string(),
+        "userTokenXExists": x_exists,
+        "userTokenYExists": y_exists,
+        "binRange": [plan.position_state.lower_bin_id, plan.position_state.upper_bin_id],
+        "chunks": chunks.len(),
+        "wouldCreateAtas": !x_exists || !y_exists,
+    }))
 }
 
 /// Split a position's bin range into per-instruction chunks. Ported from the
