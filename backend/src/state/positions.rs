@@ -526,14 +526,17 @@ impl PositionState {
             .filter(|p| p.status == PositionStatus::Closed)
             .collect();
 
-        let total_fees: f64 = self.positions.values().map(|p| p.total_fees_claimed).sum();
+        // `+ 0.0` normalises negative zero: summing an empty or all-zero set can
+        // yield -0.0, which formats as "-0.00 SOL" and reads like a loss.
+        let total_fees: f64 =
+            self.positions.values().map(|p| p.total_fees_claimed).sum::<f64>() + 0.0;
 
         let mut lines: Vec<String> = Vec::new();
         lines.push(format!(
             "Open positions: {} | Closed: {} | Total fees claimed: {:.2} SOL",
             open.len(),
             closed.len(),
-            total_fees
+            if total_fees == 0.0 { 0.0 } else { total_fees }
         ));
 
         if !open.is_empty() {

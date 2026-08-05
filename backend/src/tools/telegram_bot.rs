@@ -417,7 +417,18 @@ fn fmt_state_positions(state_path: &str) -> String {
     if active.is_empty() {
         return "📊 No open positions.".to_string();
     }
-    let mut out = format!("📊 Open positions ({})", active.len());
+    // Totals first: on a phone the portfolio answer matters more than any
+    // single row, and fees are shown alongside PnL because they routinely
+    // cover most of a loss — PnL alone reads worse than the position is.
+    let total_pnl: f64 = active.iter().filter_map(|p| p.pnl_sol).sum::<f64>() + 0.0;
+    let total_fees: f64 = active.iter().filter_map(|p| p.all_time_fees_usd).sum::<f64>() + 0.0;
+    let mut out = format!(
+        "📊 Open positions ({})\n◎{:+.4} SOL · fees ${:.2}",
+        active.len(),
+        total_pnl,
+        total_fees
+    );
+
     for p in active {
         let name = p
             .pool_name
@@ -427,11 +438,26 @@ fn fmt_state_positions(state_path: &str) -> String {
         let dry = if p.id.starts_with("dryrun-") { " 🧪" } else { "" };
         let status = match p.status {
             PositionStatus::Active => "in-range",
-            PositionStatus::OutOfRange => "out-of-range",
+            PositionStatus::OutOfRange => "⚠️ out-of-range",
             PositionStatus::Closed => "closed",
         };
+        // A position that has never been polled has no PnL yet; say so rather
+        // than printing a misleading 0.00%.
+        let pnl = match p.pnl_pct {
+            Some(pct) => {
+                let mark = if pct >= 0.0 { "🟢" } else { "🔴" };
+                format!("{mark} {pct:+.2}%")
+            }
+            None => "⏳ awaiting first poll".to_string(),
+        };
+        let fees = p.all_time_fees_usd.unwrap_or(0.0);
+        let fee_str = if fees > 0.0 {
+            format!(" · fees ${fees:.2}")
+        } else {
+            String::new()
+        };
         out.push_str(&format!(
-            "\n\n{name}{dry}\n  ◎{:.3} SOL · {status}",
+            "\n\n{name}{dry}\n  {pnl}{fee_str}\n  ◎{:.3} SOL · {status}",
             p.amount_sol
         ));
     }
@@ -465,12 +491,17 @@ fn fmt_candidates(v: &Value) -> String {
         } else {
             String::new()
         };
+        // fee/TVL is the metric the strategy actually lives on — it is what
+        // screening filters against and what decides whether fees can outrun
+        // impermanent loss. The raw `score` is an internal ranking number and
+        // means nothing on a phone, so it is not shown.
+        let fee_tvl = numf(c, "fee_active_tvl_ratio");
         out.push_str(&format!(
-            "\n{}. {name} · score {} · TVL ${} · fees ◎{}{smart_str}",
+            "\n{}. {name} · fee/TVL {:.2} · TVL ${} · vol ${}{smart_str}",
             i + 1,
-            compact(numf(c, "score")),
+            fee_tvl,
             compact(numf(c, "tvl")),
-            compact(numf(c, "fees_sol")),
+            compact(numf(c, "volume")),
         ));
     }
     out
@@ -497,7 +528,13 @@ async fn portfolio_text(config: &Config) -> String {
         .or_else(|| crate::tools::meteora_native::wallet_pubkey_from_env().ok())
         .unwrap_or_default();
     if wallet.is_empty() {
-        return "⚠️ wallet not set (MERIDIAN_WALLET)".to_string();
+        // On-chain PnL is read per wallet, so without an address there is
+        // nothing to look up. Say which knob fixes it rather than just naming
+        // the variable — this reads on a phone, away from the server.
+        return "📈 Portfolio unavailable — no wallet configured.\n\n\
+                Set MERIDIAN_WALLET (or WALLET_PRIVATE_KEY, which the address \
+                is derived from) in the bot's .env, then restart it."
+            .to_string();
     }
     let _ = config; // wallet comes from env; config reserved for future use
     let pools = crate::tools::dlmm::get_all_wallet_pools(&wallet).await;
