@@ -700,46 +700,35 @@ async fn portfolio_text(config: &Config, state_path: &str) -> String {
     let net = r_pnl + r_fees + u_pnl + u_fees;
 
     // Fixed-width rows inside a monospace fence: label left, figure right, so
-    // every number lands in the same column. Built line by line — a multi-line
-    // format string with continuations silently kept its source indentation and
-    // produced a ragged block.
-    let row = |label: &str, value: f64| format!("{:<16}{:>10.2}
-", label, value);
+    // every number lands in the same column whatever the label length. Built a
+    // row at a time — a single multi-line format string kept its own source
+    // indentation and produced a ragged block.
+    let row = |label: &str, value: f64| format!("{label:<16}{value:>10.2}\n");
     let mut body = String::new();
-    body.push_str(&format!("REALIZED   {} closed
-", closed.len()));
+    body.push_str(&format!("REALIZED   {} closed\n", closed.len()));
     body.push_str(&row("  pnl", r_pnl));
     body.push_str(&row("  fee", r_fees));
     body.push_str(&row("  subtotal", r_pnl + r_fees));
-    body.push_str(&format!("
-UNREALIZED {} open
-", open.len()));
+    body.push_str(&format!("\nUNREALIZED {} open\n", open.len()));
     body.push_str(&row("  pnl", u_pnl));
     body.push_str(&row("  fee", u_fees));
     body.push_str(&row("  subtotal", u_pnl + u_fees));
     if rent_locked > 0.0 {
-        body.push('
-');
+        body.push('\n');
         body.push_str(&row("rent locked", rent_locked));
-        body.push_str("  (refunded on close)
-");
+        body.push_str("  (refunded on close)\n");
     }
     body.push_str(&"-".repeat(26));
-    body.push('
-');
+    body.push('\n');
     body.push_str(&row("NET", net));
     if !closed.is_empty() {
         body.push_str(&format!(
-            "{:<16}{:>9.0}%  {}/{}
-",
+            "{:<16}{:>9.0}%  {}/{}\n",
             "win rate",
             wins as f64 / closed.len() as f64 * 100.0,
             wins,
             closed.len()
         ));
     }
-    format!("💰 *PORTFOLIO*
-
-```
-{body}```")
+    format!("💰 *PORTFOLIO*\n\n```\n{body}```")
 }
