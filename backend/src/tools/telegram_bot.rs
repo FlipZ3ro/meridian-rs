@@ -649,73 +649,91 @@ fn truncate(s: &str) -> String {
 /// Portfolio PnL summary matching the dashboard: realized (closed) + unrealized
 /// (open) across all pools the wallet has touched, sourced from Meteora.
 async fn portfolio_text(config: &Config, state_path: &str) -> String {
-    // Prefer the public MERIDIAN_WALLET address (read-only, no private key
-    // needed); fall back to deriving from the signing keypair if that's all set.
-    let wallet = std::env::var("MERIDIAN_WALLET")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .or_else(|| crate::tools::meteora_native::wallet_pubkey_from_env().ok())
-        .unwrap_or_default();
-    if wallet.is_empty() {
-        // On-chain PnL is read per wallet, so without an address there is
-        // nothing to look up. Say which knob fixes it rather than just naming
-        // the variable — this reads on a phone, away from the server.
-        return "📈 Portfolio unavailable — no wallet configured.\n\n\
-                Set MERIDIAN_WALLET (or WALLET_PRIVATE_KEY, which the address \
-                is derived from) in the bot's .env, then restart it."
-            .to_string();
-    }
-    let _ = config; // wallet comes from env; config reserved for future use
-    let pools = crate::tools::dlmm::get_all_wallet_pools(&wallet).await;
-    let mut realized = 0.0;
-    let mut deposit = 0.0;
-    let mut fees = 0.0;
-    let mut closed = 0usize;
-    let mut wins = 0usize;
-    for (pool, name) in &pools {
-        if let Some(h) = crate::tools::dlmm::get_pool_history(pool, name, &wallet).await {
-            realized += h.pnl_usd;
-            deposit += h.deposit_usd;
-            fees += h.fees_usd;
-            closed += h.closed_count;
-            wins += h.win_count;
-        }
-    }
-    // Unrealized comes from the bot's own state, not the pool API. The API only
-    // sees a position once it has been indexed, so a position opened minutes
-    // ago reads as $0.00 — which is exactly when you want to look. The poller
-    // refreshes these figures every 15s, so they are both fresher and
-    // authoritative. Falls back to the API when state has nothing (e.g. a
-    // wallet whose positions this bot did not open).
-    let mut unrealized = 0.0;
-    let mut open_fees = 0.0;
-    let mut open_count = 0usize;
-    if let Ok(state) = crate::state::positions::PositionState::load(state_path) {
-        for p in state.get_active() {
-            unrealized += p.pnl_usd.unwrap_or(0.0);
-            open_fees += p.all_time_fees_usd.unwrap_or(0.0);
-            open_count += 1;
-        }
-    }
-    if open_count == 0 {
-        for (pool, _) in &pools {
-            unrealized += crate::tools::dlmm::get_pool_open_pnl(pool, &wallet).await;
-        }
-    } else {
-        fees += open_fees;
-    }
-    let total = realized + unrealized;
-    let pct = if deposit > 0.0 {
-        total / deposit * 100.0
-    } else {
-        0.0
+    use crate::state::positions::{PositionState, PositionStatus};
+    let _ = config;
+
+    let state = match PositionState::load(state_path) {
+        Ok(s) => s,
+        Err(e) => return format!("⚠️ tidak bisa baca state: {e}"),
     };
-    let win_rate = if closed > 0 {
-        wins as f64 / closed as f64 * 100.0
-    } else {
-        0.0
-    };
-    format!(
-        "💰 Total PnL: ${total:.2} ({pct:.2}%)\n  realized ${realized:.2} · unrealized ${unrealized:.2}\nFees ${fees:.2} · Win rate {win_rate:.1}% · {closed} closed"
-    )
+    let all: Vec<_> = state.positions.values().collect();
+    let open: Vec<_> = all
+        .iter()
+        .filter(|p| p.status != PositionStatus::Closed)
+        .collect();
+    let closed: Vec<_> = all
+        .iter()
+        .filter(|p| p.status == PositionStatus::Closed)
+        .filter(|p| p.pnl_usd.is_some() || p.all_time_fees_usd.is_some())
+        .collect();
+
+    // Realized comes from the bot's own closed positions, not the pool API.
+    // The API lags indexing by minutes and misses positions it never saw, so it
+    // reported \/usr/bin/bash.31 against \.52 of open PnL — a portfolio view that
+    // disagrees with /positions is worse than none.
+    let r_pnl: f64 = closed.iter().map(|p| p.pnl_usd.unwrap_or(0.0)).sum::<f64>() + 0.0;
+    let r_fees: f64 = closed
+        .iter()
+        .map(|p| p.all_time_fees_usd.unwrap_or(0.0))
+        .sum::<f64>()
+        + 0.0;
+    let u_pnl: f64 = open.iter().map(|p| p.pnl_usd.unwrap_or(0.0)).sum::<f64>() + 0.0;
+    let u_fees: f64 = open
+        .iter()
+        .map(|p| p.all_time_fees_usd.unwrap_or(0.0))
+        .sum::<f64>()
+        + 0.0;
+    let wins = closed
+        .iter()
+        .filter(|p| p.pnl_usd.unwrap_or(0.0) + p.all_time_fees_usd.unwrap_or(0.0) > 0.0)
+        .count();
+
+    // Position rent is locked, not spent: closing returns it to the wallet.
+    // Shown so the gap between wallet balance and deployable capital is
+    // obvious, but deliberately kept out of the net — counting refundable rent
+    // as a cost would understate performance by roughly \ per open position.
+    let sol_price = crate::tools::wallet::get_sol_price().await.unwrap_or(0.0);
+    let rent_locked = open.len() as f64 * 0.0574 * sol_price;
+
+    let net = r_pnl + r_fees + u_pnl + u_fees;
+    let mut out = format!(
+        "💰 *PORTFOLIO*
+
+         *Realized* ({} closed)  *{:+.2}*
+  pnl {:+.2} · fee +{:.2}
+
+         *Unrealized* ({} open)  *{:+.2}*
+  pnl {:+.2} · fee +{:.2}",
+        closed.len(),
+        r_pnl + r_fees,
+        r_pnl,
+        r_fees,
+        open.len(),
+        u_pnl + u_fees,
+        u_pnl,
+        u_fees,
+    );
+    if rent_locked > 0.0 {
+        out.push_str(&format!(
+            "
+
+🔒 Rent terkunci: {:.2} USD ({} × 0.057 SOL) — balik saat close",
+            rent_locked,
+            open.len()
+        ));
+    }
+    out.push_str(&format!("
+
+━━━━━━━━━━
+*NET: {:+.2} USD*", net));
+    if !closed.is_empty() {
+        out.push_str(&format!(
+            "
+Win rate {:.0}% ({}/{})",
+            wins as f64 / closed.len() as f64 * 100.0,
+            wins,
+            closed.len()
+        ));
+    }
+    out
 }
