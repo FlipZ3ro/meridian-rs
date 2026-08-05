@@ -1170,6 +1170,10 @@ mod tests {
                 exit_bb_upper_pctb: 1.0,
                 exit_min_profit_pct: 0.0,
                 sol_mode: false,
+                // Only the fields these tests actually assert on are pinned;
+                // the rest track the shipped defaults so adding a knob doesn't
+                // break the suite.
+                ..Config::default().management
             },
             risk: RiskConfig {
                 max_deploy_amount: 50.0,

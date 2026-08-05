@@ -2387,13 +2387,17 @@ mod tests {
         );
     }
 
+    /// Compared by Debug name: the commons enum implements Debug but not
+    /// PartialEq, and that Debug string is what the CLI reports as strategyType.
     #[test]
     fn commons_strategy_type_mirrors_the_wp_mapping() {
-        use commons::dlmm::types::StrategyType as S;
-        assert_eq!(strategy_type_commons("spot", false), S::SpotImBalanced);
-        assert_eq!(strategy_type_commons("spot", true), S::SpotBalanced);
-        assert_eq!(strategy_type_commons("curve", true), S::CurveBalanced);
-        assert_eq!(strategy_type_commons("bid_ask", true), S::BidAskBalanced);
+        let name = |strategy: &str, balanced: bool| {
+            format!("{:?}", strategy_type_commons(strategy, balanced))
+        };
+        assert_eq!(name("spot", false), "SpotImBalanced");
+        assert_eq!(name("spot", true), "SpotBalanced");
+        assert_eq!(name("curve", true), "CurveBalanced");
+        assert_eq!(name("bid_ask", true), "BidAskBalanced");
     }
 
     #[tokio::test]
