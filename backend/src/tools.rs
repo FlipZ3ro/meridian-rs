@@ -1,5 +1,6 @@
 pub mod agent_meridian;
 pub mod blacklist;
+pub mod brief;
 pub mod bollinger;
 pub mod chart_indicators;
 pub mod definitions;

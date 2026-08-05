@@ -156,6 +156,13 @@ pub struct TrackedPosition {
     /// Timestamp of the last successful pnl poll, so a stale figure is visible.
     #[serde(default)]
     pub pnl_updated_at: Option<String>,
+    /// Why this position was closed, and when. Kept on the position so a report
+    /// can group closes by cause and measure how long each was held without
+    /// cross-referencing pool memory.
+    #[serde(default)]
+    pub close_reason: Option<String>,
+    #[serde(default)]
+    pub closed_at: Option<String>,
     #[serde(default)]
     pub trailing: TrailingState,
     /// Pre-deploy signal snapshot (arbitrary JSON for metrics at deploy time)
@@ -206,6 +213,8 @@ impl Default for TrackedPosition {
             unclaimed_fee_usd: None,
             all_time_fees_usd: None,
             pnl_updated_at: None,
+            close_reason: None,
+            closed_at: None,
             trailing: TrailingState::default(),
             signal_snapshot: None,
             last_managed_at: None,
@@ -416,10 +425,14 @@ impl PositionState {
     }
 
     /// Mark a position as closed with a PnL value.
-    pub fn record_close(&mut self, id: &str, pnl: f64) {
+    pub fn record_close(&mut self, id: &str, pnl: f64, reason: Option<&str>) {
         if let Some(p) = self.positions.get_mut(id) {
             p.status = PositionStatus::Closed;
             p.pnl_sol = Some(pnl);
+            p.closed_at = Some(Utc::now().to_rfc3339());
+            if let Some(r) = reason {
+                p.close_reason = Some(r.to_string());
+            }
             let pool_display = p
                 .pool_name
                 .clone()
@@ -1270,7 +1283,7 @@ mod tests {
         assert_eq!(pos.total_fees_claimed, 0.5);
         assert!(pos.last_fee_claim_at.is_some());
 
-        state.record_close("test-pos-1", 0.1);
+        state.record_close("test-pos-1", 0.1, None);
         let pos = state.positions.get("test-pos-1").unwrap();
         assert_eq!(pos.status, PositionStatus::Closed);
         assert_eq!(pos.pnl_sol, Some(0.1));

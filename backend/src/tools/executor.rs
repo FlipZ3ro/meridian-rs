@@ -945,7 +945,7 @@ impl ToolExecutor {
                     if let Some(pos) = find_tracked_position(args, positions).cloned() {
                         let reason = args["reason"].as_str().unwrap_or("agent decision");
                         let pnl = pos.pnl_sol.unwrap_or(0.0);
-                        positions.record_close(&pos.id, pnl);
+                        positions.record_close(&pos.id, pnl, Some(reason));
                         // Persist immediately so the closed position drops off the
                         // Open tab right away instead of lingering until the
                         // cycle-end save.

@@ -201,108 +201,6 @@ fn keyboard() -> Value {
     })
 }
 
-/// Daily brief: the portfolio in one screen, plus anything that looks wrong.
-///
-/// The warnings are the point. Totals tell you how the day went; the flags tell
-/// you whether the bot is actually working — a position earning no fees is
-/// dead capital, one stuck out of range is not compounding, and a missing PnL
-/// means the poller never reached it.
-fn fmt_brief(state_path: &str) -> String {
-    use crate::state::positions::{position_age_minutes, PositionState, PositionStatus};
-    let state = match PositionState::load(state_path) {
-        Ok(s) => s,
-        Err(e) => return format!("⚠️ could not read state: {e}"),
-    };
-
-    let active = state.get_active();
-    let open_pnl: f64 = active.iter().filter_map(|p| p.pnl_usd).sum::<f64>() + 0.0;
-    let open_fees: f64 = active.iter().filter_map(|p| p.all_time_fees_usd).sum::<f64>() + 0.0;
-
-    let closed: Vec<_> = state
-        .positions
-        .values()
-        .filter(|p| p.status == PositionStatus::Closed)
-        .collect();
-    let closed_pnl: f64 = closed.iter().filter_map(|p| p.pnl_usd).sum::<f64>() + 0.0;
-    let closed_fees: f64 = closed.iter().filter_map(|p| p.all_time_fees_usd).sum::<f64>() + 0.0;
-    let wins = closed
-        .iter()
-        .filter(|p| p.pnl_usd.unwrap_or(0.0) + p.all_time_fees_usd.unwrap_or(0.0) > 0.0)
-        .count();
-    let scored = closed.iter().filter(|p| p.pnl_usd.is_some()).count();
-
-    let mut out = format!(
-        "📋 *Daily brief*\n\n\
-         *Open ({})*  {:+.2} USD · fees {:.2}\n\
-         *Closed ({})*  {:+.2} USD · fees {:.2}\n\
-         Net closed: *{:+.2} USD*",
-        active.len(),
-        open_pnl,
-        open_fees,
-        closed.len(),
-        closed_pnl,
-        closed_fees,
-        closed_pnl + closed_fees,
-    );
-    if scored > 0 {
-        out.push_str(&format!(
-            "\nNet-positive closes: {wins}/{scored} ({:.0}%)",
-            wins as f64 / scored as f64 * 100.0
-        ));
-    }
-
-    out.push_str("\n\n*Positions*");
-    let mut warnings: Vec<String> = Vec::new();
-    for p in &active {
-        let name = p
-            .pool_name
-            .clone()
-            .or_else(|| p.base_symbol.clone())
-            .unwrap_or_else(|| "?".into());
-        let age = position_age_minutes(p);
-        let fees = p.all_time_fees_usd.unwrap_or(0.0);
-        let net = p.pnl_usd.unwrap_or(0.0) + fees;
-        match p.pnl_pct {
-            Some(pct) => out.push_str(&format!(
-                "\n{} {name} {:+.2}% · fees ${:.2} · net ${:+.2} · {age}m",
-                if net >= 0.0 { "🟢" } else { "🔴" },
-                pct,
-                fees,
-                net
-            )),
-            None => out.push_str(&format!("\n⏳ {name} · awaiting poll · {age}m")),
-        }
-
-        // Anomalies worth acting on, not just noting.
-        if p.pnl_pct.is_none() && age >= 5 {
-            warnings.push(format!("{name}: no PnL after {age}m — poller not reaching it"));
-        }
-        if fees == 0.0 && age >= 30 {
-            warnings.push(format!("{name}: no fees in {age}m — capital idle"));
-        }
-        if p.status == PositionStatus::OutOfRange {
-            if let Some(since) = p.out_of_range_since.as_deref() {
-                if let Ok(t) = chrono::DateTime::parse_from_rfc3339(since) {
-                    let mins = (chrono::Utc::now() - t.with_timezone(&chrono::Utc)).num_minutes();
-                    if mins >= 15 {
-                        warnings.push(format!("{name}: out of range {mins}m — not earning"));
-                    }
-                }
-            }
-        }
-    }
-
-    if warnings.is_empty() {
-        out.push_str("\n\n✅ *No anomalies*");
-    } else {
-        out.push_str("\n\n⚠️ *Check these*");
-        for w in warnings.iter().take(8) {
-            out.push_str(&format!("\n• {w}"));
-        }
-    }
-    out
-}
-
 /// Reply-keyboard buttons send their label, not a command — translate.
 fn map_button_label(text: &str) -> &str {
     match text.trim() {
@@ -529,7 +427,7 @@ async fn handle(
             Err(e) => format!("⚠️ {e}"),
         },
         "positions" => fmt_state_positions(state_path),
-        "brief" => fmt_brief(state_path),
+        "brief" => crate::tools::brief::render(state_path),
         "candidates" => {
             let lim = rest.first().cloned().unwrap_or_else(|| "8".to_string());
             match run_json("candidates", &["--limit".to_string(), lim], config, state_path).await
