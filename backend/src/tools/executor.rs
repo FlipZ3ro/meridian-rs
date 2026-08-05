@@ -553,12 +553,17 @@ impl ToolExecutor {
                 // the commons migration gives us Token-2022-aware tx building, don't
                 // enter these pools at all. RPC error → allowed (never block trading
                 // on a transient hiccup).
+                // Token-2022 pools are now deployable: deploy_position routes
+                // them through the commons path and claim_fees falls back to it,
+                // so the lifecycle is covered end to end. The gate stays as a
+                // kill switch — set management.skipToken2022 back to true to shut
+                // these out again without a rebuild.
                 if config.management.skip_token_2022 {
                     if let Some(base_mint) = dup_base_mint.as_deref() {
                         if crate::tools::meteora_native::is_token_2022_mint(config, base_mint).await
                         {
                             anyhow::bail!(
-                                "Token-2022 base token {} — skipping (claim/close unsupported by the wp SDK, positions get stuck)",
+                                "Token-2022 base token {} — skipping (skipToken2022 is on)",
                                 &base_mint[..8.min(base_mint.len())]
                             );
                         }

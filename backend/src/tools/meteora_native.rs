@@ -298,6 +298,38 @@ pub async fn deploy_position(
     strategy: &str,
     config: &Config,
 ) -> Result<NativeDeployResult> {
+    // Token-2022 base tokens cannot be deployed through wp at all — its
+    // one-shot assumes classic SPL, which is why these pools were screened out
+    // entirely. Route just those through the commons path, which reads the
+    // token programs from the pair's own flags. Classic-SPL pools keep using wp,
+    // which works today and has far more live mileage, so this can only add
+    // reach and never regress the common case.
+    if let Ok(base_mint) = pool_base_mint(config, pool_address).await {
+        if is_token_2022_mint(config, &base_mint).await {
+            tracing::info!(
+                pool = %pool_address,
+                "Token-2022 pool — deploying via commons path"
+            );
+            let outcome = deploy_position_commons(
+                pool_address,
+                amount_sol,
+                bins_below,
+                bins_above,
+                strategy,
+                config,
+                false,
+            )
+            .await?;
+            if let Some(err) = outcome.error {
+                anyhow::bail!("commons deploy failed: {}", err);
+            }
+            return Ok(NativeDeployResult {
+                signature: outcome.signature.unwrap_or_default(),
+                position_address: outcome.position_address,
+            });
+        }
+    }
+
     let wallet_secret = wallet_secret_from_env()?;
     let keypair = keypair_from_secret(&wallet_secret)?;
     let pool = parse_pubkey("DLMM pool address", pool_address)?;
