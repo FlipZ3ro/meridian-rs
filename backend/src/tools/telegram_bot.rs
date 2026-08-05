@@ -79,6 +79,40 @@ pub async fn run(
                     let id = upd.get("update_id").and_then(Value::as_i64).unwrap_or(offset);
                     offset = id + 1;
 
+                    // A tap on an inline "Refresh" button arrives as a
+                    // callback_query, not a message. Re-run the command it
+                    // carries and edit the original message in place, so the
+                    // chat isn't buried under a new copy on every refresh.
+                    if let Some(cb) = upd.get("callback_query") {
+                        let cb_id = cb.get("id").and_then(Value::as_str).unwrap_or("");
+                        let data = cb.get("data").and_then(Value::as_str).unwrap_or("");
+                        let cb_chat = cb
+                            .get("message")
+                            .and_then(|m| m.get("chat"))
+                            .and_then(|c| c.get("id"))
+                            .and_then(Value::as_i64)
+                            .map(|i| i.to_string())
+                            .unwrap_or_default();
+                        let msg_id = cb
+                            .get("message")
+                            .and_then(|m| m.get("message_id"))
+                            .and_then(Value::as_i64)
+                            .unwrap_or(0);
+
+                        // Always answer, even when rejecting: an unanswered
+                        // callback leaves a spinner stuck on the button.
+                        answer_callback(&client, &token, cb_id).await;
+                        if cb_chat != admin {
+                            warn("telegram", &format!("rejected non-admin callback {cb_chat}"));
+                            continue;
+                        }
+                        if let Some(cmd) = data.strip_prefix("r:") {
+                            let body = handle(cmd, &config, &state_path).await;
+                            edit_with_refresh(&client, &token, &admin, msg_id, &body, cmd).await;
+                        }
+                        continue;
+                    }
+
                     let Some(msg) = upd.get("message") else {
                         continue;
                     };
@@ -104,14 +138,17 @@ pub async fn run(
                         continue;
                     }
 
-                    let reply = handle(
-                        text,
-                        &config,
-                        &state_path,
-                    )
-                    .await;
-                    let _ =
-                        crate::tools::telegram::send_message_safe(&token, &admin, &reply).await;
+                    let reply = handle(text, &config, &state_path).await;
+                    match refreshable(text) {
+                        Some(cmd) => {
+                            send_with_refresh(&client, &token, &admin, &reply, cmd).await
+                        }
+                        None => {
+                            let _ =
+                                crate::tools::telegram::send_message_safe(&token, &admin, &reply)
+                                    .await;
+                        }
+                    }
                 }
             }
             Err(e) => {
@@ -161,6 +198,110 @@ fn keyboard() -> Value {
     })
 }
 
+/// Reply-keyboard buttons send their label, not a command — translate.
+fn map_button_label(text: &str) -> &str {
+    match text.trim() {
+        "📊 Status" => "/status",
+        "📋 Positions" => "/positions",
+        "📈 PnL" => "/pnl",
+        "💰 Balance" => "/balance",
+        "🎯 Candidates" => "/candidates",
+        "🧪 Dry-run" => "/dryrun",
+        "⏸️ Stop" => "/stop",
+        "❓ Help" => "/help",
+        other => other,
+    }
+}
+
+/// Bare command name: strips the leading '/' and any '@botname' suffix.
+fn normalize(raw: &str) -> String {
+    raw.trim()
+        .trim_start_matches('/')
+        .split('@')
+        .next()
+        .unwrap_or("")
+        .to_lowercase()
+}
+
+/// Commands whose answer goes stale immediately and is worth re-reading in
+/// place. Everything else (help, start/stop confirmations) is a one-shot reply
+/// and gets no button.
+fn refreshable(text: &str) -> Option<&'static str> {
+    match normalize(map_button_label(text)).as_str() {
+        "positions" => Some("positions"),
+        "balance" => Some("balance"),
+        "status" => Some("status"),
+        "pnl" => Some("pnl"),
+        _ => None,
+    }
+}
+
+/// Inline keyboard carrying the command to re-run. `r:` prefix keeps the
+/// callback namespace open for other button types later.
+fn refresh_markup(cmd: &str) -> Value {
+    serde_json::json!({
+        "inline_keyboard": [[{ "text": "🔄 Refresh", "callback_data": format!("r:{cmd}") }]]
+    })
+}
+
+/// A refreshed message must differ from the previous one or Telegram rejects
+/// the edit ("message is not modified"). The timestamp guarantees that and
+/// doubles as the answer to "how fresh is this?".
+fn stamped(text: &str) -> String {
+    format!(
+        "{text}\n\n🕒 {}",
+        chrono::Utc::now().format("%H:%M:%S UTC")
+    )
+}
+
+async fn send_with_refresh(
+    client: &reqwest::Client,
+    token: &str,
+    chat: &str,
+    text: &str,
+    cmd: &str,
+) {
+    let url = format!("{TG_API}/bot{token}/sendMessage");
+    let body = serde_json::json!({
+        "chat_id": chat,
+        "text": stamped(text),
+        "reply_markup": refresh_markup(cmd),
+    });
+    if let Err(e) = client.post(&url).json(&body).send().await {
+        warn("telegram", &format!("sendMessage(refresh) failed: {e}"));
+    }
+}
+
+async fn edit_with_refresh(
+    client: &reqwest::Client,
+    token: &str,
+    chat: &str,
+    message_id: i64,
+    text: &str,
+    cmd: &str,
+) {
+    let url = format!("{TG_API}/bot{token}/editMessageText");
+    let body = serde_json::json!({
+        "chat_id": chat,
+        "message_id": message_id,
+        "text": stamped(text),
+        "reply_markup": refresh_markup(cmd),
+    });
+    if let Err(e) = client.post(&url).json(&body).send().await {
+        warn("telegram", &format!("editMessageText failed: {e}"));
+    }
+}
+
+/// Clears the loading spinner on the tapped button.
+async fn answer_callback(client: &reqwest::Client, token: &str, callback_id: &str) {
+    if callback_id.is_empty() {
+        return;
+    }
+    let url = format!("{TG_API}/bot{token}/answerCallbackQuery");
+    let body = serde_json::json!({ "callback_query_id": callback_id });
+    let _ = client.post(&url).json(&body).send().await;
+}
+
 /// Send a message that also (re)attaches the persistent reply keyboard.
 async fn send_keyboard(client: &reqwest::Client, token: &str, chat: &str, text: &str) {
     let url = format!("{TG_API}/bot{token}/sendMessage");
@@ -199,27 +340,9 @@ async fn handle(
     config: &Config,
     state_path: &str,
 ) -> String {
-    // Map reply-keyboard button labels to their command.
-    let mapped = match text.trim() {
-        "📊 Status" => "/status",
-        "📋 Positions" => "/positions",
-        "📈 PnL" => "/pnl",
-        "💰 Balance" => "/balance",
-        "🎯 Candidates" => "/candidates",
-        "🧪 Dry-run" => "/dryrun",
-        "⏸️ Stop" => "/stop",
-        "❓ Help" => "/help",
-        other => other,
-    };
+    let mapped = map_button_label(text);
     let mut it = mapped.trim().split_whitespace();
-    let raw = it.next().unwrap_or("");
-    // strip leading '/' and any '@botname' suffix
-    let cmd = raw
-        .trim_start_matches('/')
-        .split('@')
-        .next()
-        .unwrap_or("")
-        .to_lowercase();
+    let cmd = normalize(it.next().unwrap_or(""));
     let rest: Vec<String> = it.map(|s| s.to_string()).collect();
 
     match cmd.as_str() {

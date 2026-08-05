@@ -551,8 +551,48 @@ pub async fn swap_token(
     referral_bps: u32,
     config: &Config,
 ) -> Result<SwapResult> {
-    let input_mint = normalize_mint(mint);
-    let output_mint = SOL_MINT.to_string();
+    swap_exact_in(
+        &normalize_mint(mint),
+        SOL_MINT,
+        amount,
+        slippage_bps,
+        Some(referral_bps),
+        config,
+    )
+    .await
+}
+
+/// Buy the base token with SOL — the entry leg of a dual-side deposit.
+///
+/// Deliberately carries no referral fee. Jupiter takes the referral cut from the
+/// OUTPUT mint, which requires a referral token account for that mint to exist:
+/// it does for SOL (every exit swap goes through it) but not for an arbitrary
+/// base token, and a missing one fails the whole order.
+pub async fn swap_sol_to_token(
+    mint: &str,
+    amount_sol: f64,
+    slippage_bps: u32,
+    config: &Config,
+) -> Result<SwapResult> {
+    let output_mint = normalize_mint(mint);
+    if output_mint == SOL_MINT {
+        return Err(anyhow!("swap_sol_to_token: output mint is SOL, nothing to swap"));
+    }
+    swap_exact_in(SOL_MINT, &output_mint, amount_sol, slippage_bps, None, config).await
+}
+
+/// One Jupiter Swap V2 leg in either direction: order → sign locally in Rust →
+/// execute. `referral_bps` is `None` when no referral fee should be attached.
+async fn swap_exact_in(
+    input_mint: &str,
+    output_mint: &str,
+    amount: f64,
+    slippage_bps: u32,
+    referral_bps: Option<u32>,
+    config: &Config,
+) -> Result<SwapResult> {
+    let input_mint = input_mint.to_string();
+    let output_mint = output_mint.to_string();
 
     if config.dry_run || std::env::var("DRY_RUN").ok().as_deref() == Some("true") {
         return Ok(SwapResult {
@@ -603,13 +643,15 @@ pub async fn swap_token(
         url = format!("{}&slippageBps={}", url, slippage_bps);
     }
 
-    let referral_params = get_referral_params(config).map(|(account, configured_bps)| {
-        let fee_bps = if (50..=255).contains(&referral_bps) {
-            referral_bps
-        } else {
-            configured_bps
-        };
-        (account, fee_bps)
+    let referral_params = referral_bps.and_then(|requested_bps| {
+        get_referral_params(config).map(|(account, configured_bps)| {
+            let fee_bps = if (50..=255).contains(&requested_bps) {
+                requested_bps
+            } else {
+                configured_bps
+            };
+            (account, fee_bps)
+        })
     });
     if let Some((account, fee_bps)) = &referral_params {
         url = format!(
@@ -618,7 +660,7 @@ pub async fn swap_token(
         );
     }
 
-    tracing::info!("swap_token: {} of {} → {}", amount, input_mint, output_mint,);
+    tracing::info!("swap: {} of {} → {}", amount, input_mint, output_mint,);
 
     // ─── Get Swap V2 order ──────────────────────────────────────
     let mut req_builder = client.get(&url).timeout(std::time::Duration::from_secs(30));
@@ -675,7 +717,7 @@ pub async fn swap_token(
         .request_id
         .ok_or_else(|| anyhow!("Swap V2 order returned no request_id"))?;
 
-    tracing::info!("swap_token: order received, request_id={}", request_id);
+    tracing::info!("swap: order received, request_id={}", request_id);
 
     // Keypair was loaded up front (it supplied the taker); reuse it to sign.
     let signed_tx = match sign_transaction_base64(&unsigned_tx, &keypair) {
@@ -700,7 +742,7 @@ pub async fn swap_token(
     };
 
     tracing::info!(
-        "swap_token: transaction signed in Rust, executing request_id={}",
+        "swap: transaction signed in Rust, executing request_id={}",
         request_id
     );
     let mut result = execute_swap(&signed_tx, &request_id, config).await?;

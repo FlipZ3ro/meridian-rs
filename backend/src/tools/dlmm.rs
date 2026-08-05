@@ -932,7 +932,15 @@ pub async fn deploy_position(
 ) -> Result<DeployResult> {
     let pool_address = crate::tools::wallet::normalize_mint(pool_address);
 
-    let bins_above_val = bins_above.unwrap_or(0);
+    let dual_side = config.management.dual_side_enabled;
+    // Single-side deliberately has no upside half — it deposits SOL below the
+    // active bin and waits for price to come down. Dual-side sits around the
+    // active bin and needs bins on both sides for the base token to occupy.
+    let bins_above_val = bins_above.unwrap_or(if dual_side {
+        config.management.dual_side_bins_above
+    } else {
+        0
+    });
     let strategy_str = strategy.unwrap_or("spot");
 
     // ─── Fetch active bin and pool info first ─────────────────────
@@ -983,8 +991,16 @@ pub async fn deploy_position(
     // so the downside range covers a consistent fraction of price
     // (config.strategy.target_downside_pct) instead of a flat bin count that
     // goes out-of-range fast on tight, low-bin_step pools.
-    let bins_below_val =
-        bins_below.unwrap_or_else(|| coverage_based_bins_below(bin_step, &config.strategy));
+    // Dual-side is sized from its own knobs rather than the coverage math: that
+    // math targets a downside-only range (target_downside_pct) and its bin count
+    // clears the native path's 69-bin ceiling as soon as an upside half is added.
+    let bins_below_val = bins_below.unwrap_or_else(|| {
+        if dual_side {
+            config.management.dual_side_bins_below
+        } else {
+            coverage_based_bins_below(bin_step, &config.strategy)
+        }
+    });
     let total_bins = bins_below_val + bins_above_val;
     let is_wide_range = total_bins > 69;
 
@@ -1024,7 +1040,11 @@ pub async fn deploy_position(
     // limit (>69 bins); otherwise it's omitted so callers don't misread a
     // normal deploy as rejected.
     let mut safety_check_list = vec![
-        "single_side_sol_only".to_string(),
+        if dual_side {
+            "dual_side_swaps_sol_to_base_before_deposit".to_string()
+        } else {
+            "single_side_sol_only".to_string()
+        },
         "native_path_does_not_initialize_bin_arrays".to_string(),
     ];
     if is_wide_range {

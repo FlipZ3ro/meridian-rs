@@ -159,21 +159,38 @@ fn sol_to_lamports(amount_sol: f64) -> Result<u64> {
     Ok((amount_sol * 1_000_000_000.0).floor() as u64)
 }
 
-fn strategy_type_from_name(strategy: &str) -> StrategyType {
-    // Single-side SOL deposits (amount_x = 0) are IMBALANCED, so AddLiquidityByStrategy2
-    // needs the *ImBalanced strategy type. *Balanced requires both tokens in equal
-    // value (deposits ~0 when one side is empty, leaving wrapped SOL stuck); *OneSide
-    // belongs to a different instruction (InvalidStrategyParameters / 0x17a6). The
-    // original JS passes TS-SDK `StrategyType.Spot`, which maps to SpotImBalanced for
-    // single-side deposits.
-    match strategy.to_ascii_lowercase().replace('-', "_").as_str() {
-        "curve" | "curve_one_side" | "curve_balanced" | "curve_imbalanced" => {
+/// Which family of `StrategyType` the deposit needs. This is not a preference —
+/// the program rejects the wrong one with `InvalidStrategyParameters` (0x17a6).
+///
+/// Single-side SOL deposits (amount_x = 0) are IMBALANCED, so AddLiquidityByStrategy2
+/// needs the *ImBalanced strategy type. *Balanced requires both tokens in equal
+/// value (deposits ~0 when one side is empty, leaving wrapped SOL stuck); *OneSide
+/// belongs to a different instruction. The original JS passes TS-SDK
+/// `StrategyType.Spot`, which maps to SpotImBalanced for single-side deposits.
+///
+/// Dual-side supplies both amounts around the active bin, which is exactly what
+/// the *Balanced variants describe.
+fn strategy_type_from_name(strategy: &str, balanced: bool) -> StrategyType {
+    match (
+        strategy.to_ascii_lowercase().replace('-', "_").as_str(),
+        balanced,
+    ) {
+        ("curve" | "curve_one_side" | "curve_balanced" | "curve_imbalanced", false) => {
             StrategyType::CurveImBalanced
         }
-        "bid_ask" | "bidask" | "bid_ask_one_side" | "bid_ask_balanced" | "bid_ask_imbalanced" => {
-            StrategyType::BidAskImBalanced
+        ("curve" | "curve_one_side" | "curve_balanced" | "curve_imbalanced", true) => {
+            StrategyType::CurveBalanced
         }
-        _ => StrategyType::SpotImBalanced,
+        (
+            "bid_ask" | "bidask" | "bid_ask_one_side" | "bid_ask_balanced" | "bid_ask_imbalanced",
+            false,
+        ) => StrategyType::BidAskImBalanced,
+        (
+            "bid_ask" | "bidask" | "bid_ask_one_side" | "bid_ask_balanced" | "bid_ask_imbalanced",
+            true,
+        ) => StrategyType::BidAskBalanced,
+        (_, false) => StrategyType::SpotImBalanced,
+        (_, true) => StrategyType::SpotBalanced,
     }
 }
 
@@ -181,15 +198,23 @@ fn strategy_name(strategy_type: StrategyType) -> &'static str {
     match strategy_type {
         StrategyType::CurveImBalanced => "curve_imbalanced",
         StrategyType::BidAskImBalanced => "bid_ask_imbalanced",
+        StrategyType::CurveBalanced => "curve_balanced",
+        StrategyType::BidAskBalanced => "bid_ask_balanced",
+        StrategyType::SpotBalanced => "spot_balanced",
         _ => "spot_imbalanced",
     }
 }
 
-fn strategy_parameters(min_bin_id: i32, max_bin_id: i32, strategy: &str) -> StrategyParameters {
+fn strategy_parameters(
+    min_bin_id: i32,
+    max_bin_id: i32,
+    strategy: &str,
+    balanced: bool,
+) -> StrategyParameters {
     StrategyParameters {
         min_bin_id,
         max_bin_id,
-        strategy_type: strategy_type_from_name(strategy),
+        strategy_type: strategy_type_from_name(strategy, balanced),
         parameteres: [0; 64],
     }
 }
@@ -222,6 +247,11 @@ pub struct NativeDeployBuildInput<'a> {
     pub bins_below: i64,
     pub bins_above: i64,
     pub strategy: &'a str,
+    /// Base-token units for the X side. Zero for a single-side SOL deposit;
+    /// dual-side supplies what the entry swap acquired.
+    pub amount_x: u64,
+    /// Dual-side deposit — selects the *Balanced strategy variants.
+    pub dual_side: bool,
 }
 
 pub fn build_deploy_request(
@@ -234,14 +264,14 @@ pub fn build_deploy_request(
     let position_keypair = Keypair::new();
     let (min_bin_id, max_bin_id, width) =
         bin_range(input.active_id, input.bins_below, input.bins_above)?;
-    let strategy_type = strategy_type_from_name(input.strategy);
+    let strategy_type = strategy_type_from_name(input.strategy, input.dual_side);
 
     Ok(NativeDeployRequest {
         pool_address: pool.to_string(),
         position_address: position_keypair.pubkey().to_string(),
         authority: keypair.pubkey().to_string(),
         rpc_url: resolve_rpc_url(config),
-        amount_x: 0,
+        amount_x: input.amount_x,
         amount_y: sol_to_lamports(input.amount_sol)?,
         active_id: input.active_id,
         min_bin_id,
@@ -289,6 +319,141 @@ pub fn build_close_request(
     })
 }
 
+/// How a dual-side deposit is split: base-token units for `amount_x`, lamports
+/// for `amount_y`.
+#[derive(Debug, Clone, Default)]
+pub struct DualSideEntry {
+    /// SOL spent buying the base token.
+    pub sol_swapped: f64,
+    /// Base-token units held and available to deposit.
+    pub amount_x: u64,
+    /// Lamports left for the SOL side.
+    pub amount_y: u64,
+    /// Entry-swap signature, absent when nothing was swapped (simulation).
+    pub swap_signature: Option<String>,
+    /// What actually happened, for CLI output and logs.
+    pub note: String,
+}
+
+/// The wallet's balance for `mint` in the token's own base units, read from the
+/// exact associated token account the deposit will spend from. A missing account
+/// is a zero balance, not an error — before the first buy there is nothing there
+/// and the deploy creates it.
+pub async fn wallet_token_base_units(config: &Config, mint: &str) -> Result<u64> {
+    let owner = keypair_from_secret(&wallet_secret_from_env()?)?.pubkey();
+    let mint_pk = parse_pubkey("token mint", mint)?;
+    let rpc = RpcClient::new(resolve_rpc_url(config));
+    let token_program = detect_token_program(&rpc, &mint_pk).await;
+    let ata = derive_ata(&owner, &mint_pk, &token_program);
+    Ok(rpc
+        .get_token_account_balance(&ata)
+        .await
+        .ok()
+        .and_then(|bal| bal.amount.parse::<u64>().ok())
+        .unwrap_or(0))
+}
+
+/// Seconds to wait for the entry swap to show up in the token account before
+/// giving up. Jupiter's execute already confirms, so this only covers RPC lag.
+const ENTRY_SWAP_SETTLE_ATTEMPTS: u32 = 10;
+const ENTRY_SWAP_SETTLE_DELAY_MS: u64 = 1_500;
+
+/// Buy the base-token half of a dual-side deposit and report the resulting split.
+///
+/// With `execute = false` nothing is spent: `amount_x` is sized from what the
+/// wallet already holds so a simulated deposit still exercises the balanced
+/// strategy path with an amount it can actually afford. That leaves the swap leg
+/// itself unproven — the note says so rather than implying a full rehearsal.
+///
+/// Only the balance the swap ADDS is treated as depositable. Leftovers of the
+/// same mint from an earlier position are not this deposit's to spend.
+pub async fn acquire_base_token(
+    base_mint: &str,
+    amount_sol: f64,
+    base_pct: f64,
+    slippage_bps: u32,
+    config: &Config,
+    execute: bool,
+) -> Result<DualSideEntry> {
+    if !(0.05..=0.9).contains(&base_pct) {
+        anyhow::bail!(
+            "dualSideBasePct must be between 0.05 and 0.9 (got {}); 0.5 is the balanced split",
+            base_pct
+        );
+    }
+    let sol_for_base = amount_sol * base_pct;
+    let amount_y = sol_to_lamports(amount_sol - sol_for_base)?;
+
+    if !execute {
+        let held = wallet_token_base_units(config, base_mint).await.unwrap_or(0);
+        return Ok(DualSideEntry {
+            sol_swapped: 0.0,
+            amount_x: held,
+            amount_y,
+            swap_signature: None,
+            note: format!(
+                "simulation: no swap sent. Live entry would swap {:.4} SOL → {}; \
+                 amount_x here is the {} base units the wallet already holds",
+                sol_for_base, base_mint, held
+            ),
+        });
+    }
+
+    let before = wallet_token_base_units(config, base_mint).await.unwrap_or(0);
+    let swap = crate::tools::wallet::swap_sol_to_token(
+        base_mint,
+        sol_for_base,
+        slippage_bps,
+        config,
+    )
+    .await?;
+    if !swap.success {
+        anyhow::bail!(
+            "dual-side entry swap of {:.4} SOL → {} failed: {}",
+            sol_for_base,
+            base_mint,
+            swap.error.unwrap_or_else(|| "unknown error".to_string())
+        );
+    }
+    let signature = swap.tx.clone();
+
+    // Settle: the deposit spends from the token account, so wait until the RPC
+    // actually shows the tokens rather than trusting the swap's own figure.
+    let mut acquired = 0u64;
+    for _ in 0..ENTRY_SWAP_SETTLE_ATTEMPTS {
+        let now = wallet_token_base_units(config, base_mint).await.unwrap_or(0);
+        acquired = now.saturating_sub(before);
+        if acquired > 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(ENTRY_SWAP_SETTLE_DELAY_MS)).await;
+    }
+    if acquired == 0 {
+        // The SOL is gone but the tokens are not visible. Depositing blind here
+        // would be worse than stopping: bail with the signature so the position
+        // can be opened or the swap reversed by hand.
+        anyhow::bail!(
+            "dual-side entry swap {} sent {:.4} SOL but no {} balance appeared after {}s — \
+             not depositing blind; reconcile the wallet manually",
+            signature.as_deref().unwrap_or("<no signature>"),
+            sol_for_base,
+            base_mint,
+            (ENTRY_SWAP_SETTLE_ATTEMPTS as u64 * ENTRY_SWAP_SETTLE_DELAY_MS) / 1000
+        );
+    }
+
+    Ok(DualSideEntry {
+        sol_swapped: sol_for_base,
+        amount_x: acquired,
+        amount_y,
+        swap_signature: signature,
+        note: format!(
+            "swapped {:.4} SOL → {} base units of {}",
+            sol_for_base, acquired, base_mint
+        ),
+    })
+}
+
 pub async fn deploy_position(
     pool_address: &str,
     amount_sol: f64,
@@ -298,14 +463,27 @@ pub async fn deploy_position(
     strategy: &str,
     config: &Config,
 ) -> Result<NativeDeployResult> {
+    let dual_side = config.management.dual_side_enabled;
+    // A balanced deposit needs bins on both sides of the active one: with
+    // max_bin_id == active_id the base token has a single bin to sit in and
+    // almost all of it stays in the wallet. Refuse rather than deposit lopsided.
+    if dual_side && bins_above <= 0 {
+        anyhow::bail!(
+            "dual-side deploy needs bins above the active bin (got bins_above={}); \
+             set management.dualSideBinsAbove",
+            bins_above
+        );
+    }
+    let base_mint = pool_base_mint(config, pool_address).await.ok();
+
     // Token-2022 base tokens cannot be deployed through wp at all — its
     // one-shot assumes classic SPL, which is why these pools were screened out
     // entirely. Route just those through the commons path, which reads the
     // token programs from the pair's own flags. Classic-SPL pools keep using wp,
     // which works today and has far more live mileage, so this can only add
     // reach and never regress the common case.
-    if let Ok(base_mint) = pool_base_mint(config, pool_address).await {
-        if is_token_2022_mint(config, &base_mint).await {
+    if let Some(base_mint) = base_mint.as_deref() {
+        if is_token_2022_mint(config, base_mint).await {
             tracing::info!(
                 pool = %pool_address,
                 "Token-2022 pool — deploying via commons path"
@@ -317,6 +495,7 @@ pub async fn deploy_position(
                 bins_above,
                 strategy,
                 config,
+                dual_side,
                 false,
             )
             .await?;
@@ -333,7 +512,6 @@ pub async fn deploy_position(
     let wallet_secret = wallet_secret_from_env()?;
     let keypair = keypair_from_secret(&wallet_secret)?;
     let pool = parse_pubkey("DLMM pool address", pool_address)?;
-    let amount_y = sol_to_lamports(amount_sol)?;
 
     let rpc_url = resolve_rpc_url(config);
     let rpc_client = RpcClient::new(rpc_url);
@@ -358,6 +536,36 @@ pub async fn deploy_position(
     };
 
     let (min_bin_id, max_bin_id, width) = bin_range(active_id, bins_below, bins_above)?;
+
+    // Buy the token side last: everything that can reject the deploy without
+    // costing anything (bin range, active id, pool decode) has already run.
+    let (amount_x, amount_y) = if dual_side {
+        let base_mint = base_mint.ok_or_else(|| {
+            anyhow!(
+                "dual-side deploy needs the pool's base mint and it could not be resolved for {}",
+                pool_address
+            )
+        })?;
+        let entry = acquire_base_token(
+            &base_mint,
+            amount_sol,
+            config.management.dual_side_base_pct,
+            config.management.dual_side_slippage_bps,
+            config,
+            true,
+        )
+        .await?;
+        tracing::info!(
+            pool = %pool_address,
+            swap = %entry.swap_signature.as_deref().unwrap_or("-"),
+            "dual-side entry: {}",
+            entry.note
+        );
+        (entry.amount_x, entry.amount_y)
+    } else {
+        (0, sol_to_lamports(amount_sol)?)
+    };
+
     let position_keypair = Keypair::new();
     let position_address = position_keypair.pubkey();
     let params = AddLiquidityParams {
@@ -368,12 +576,12 @@ pub async fn deploy_position(
             lower_bin_id: min_bin_id,
             width,
         }),
-        amount_x: 0,
+        amount_x,
         amount_y,
         active_id,
         // Tolerate a few bins of movement between fetch and execution.
         max_active_bin_slippage: 5,
-        strategy_parameters: strategy_parameters(min_bin_id, max_bin_id, strategy),
+        strategy_parameters: strategy_parameters(min_bin_id, max_bin_id, strategy, dual_side),
         authority: keypair.pubkey(),
     };
 
@@ -705,15 +913,29 @@ pub async fn claim_fees_commons(
 
 /// Map our strategy name onto the commons `StrategyType`. Mirrors
 /// [`strategy_type_from_name`] (which returns the wp enum) — single-side SOL
-/// deposits are imbalanced, so the *ImBalanced variants are the correct ones.
-fn strategy_type_commons(strategy: &str) -> commons::dlmm::types::StrategyType {
+/// deposits are imbalanced, dual-side deposits are balanced.
+fn strategy_type_commons(strategy: &str, balanced: bool) -> commons::dlmm::types::StrategyType {
     use commons::dlmm::types::StrategyType as S;
-    match strategy.to_ascii_lowercase().replace('-', "_").as_str() {
-        "curve" | "curve_one_side" | "curve_balanced" | "curve_imbalanced" => S::CurveImBalanced,
-        "bid_ask" | "bidask" | "bid_ask_one_side" | "bid_ask_balanced" | "bid_ask_imbalanced" => {
-            S::BidAskImBalanced
+    match (
+        strategy.to_ascii_lowercase().replace('-', "_").as_str(),
+        balanced,
+    ) {
+        ("curve" | "curve_one_side" | "curve_balanced" | "curve_imbalanced", false) => {
+            S::CurveImBalanced
         }
-        _ => S::SpotImBalanced,
+        ("curve" | "curve_one_side" | "curve_balanced" | "curve_imbalanced", true) => {
+            S::CurveBalanced
+        }
+        (
+            "bid_ask" | "bidask" | "bid_ask_one_side" | "bid_ask_balanced" | "bid_ask_imbalanced",
+            false,
+        ) => S::BidAskImBalanced,
+        (
+            "bid_ask" | "bidask" | "bid_ask_one_side" | "bid_ask_balanced" | "bid_ask_imbalanced",
+            true,
+        ) => S::BidAskBalanced,
+        (_, false) => S::SpotImBalanced,
+        (_, true) => S::SpotBalanced,
     }
 }
 
@@ -730,6 +952,18 @@ pub struct CommonsDeployOutcome {
     pub active_id: i32,
     pub min_bin_id: i32,
     pub max_bin_id: i32,
+    // ── What the deposit actually supplied ───────────────────
+    pub dual_side: bool,
+    /// Strategy variant the instruction carried, e.g. `SpotBalanced`.
+    pub strategy_type: String,
+    pub amount_x: u64,
+    pub amount_y: u64,
+    /// Base token bought for the X side, when dual-side.
+    pub base_mint: Option<String>,
+    /// Entry-swap signature; absent in simulation.
+    pub entry_swap_signature: Option<String>,
+    /// How the X side was sourced — reads differently in simulation.
+    pub entry_note: Option<String>,
 }
 
 /// Phase 4 (commons migration): open a single-side-SOL position through the
@@ -743,7 +977,9 @@ pub struct CommonsDeployOutcome {
 ///
 /// With `simulate_only` the transaction is built and run through
 /// `simulateTransaction`: the validator executes it and reports success or the
-/// exact failure, but nothing is broadcast and no funds move.
+/// exact failure, but nothing is broadcast and no funds move. That extends to
+/// the dual-side entry swap — simulation never buys the base token, so the X
+/// side is sized from what the wallet already holds.
 pub async fn deploy_position_commons(
     pool_address: &str,
     amount_sol: f64,
@@ -751,6 +987,7 @@ pub async fn deploy_position_commons(
     bins_above: i64,
     strategy: &str,
     config: &Config,
+    dual_side: bool,
     simulate_only: bool,
 ) -> Result<CommonsDeployOutcome> {
     use anchor_lang::{InstructionData, ToAccountMetas};
@@ -772,7 +1009,6 @@ pub async fn deploy_position_commons(
     let lb_pair =
         PubkeyV2::from_str(pool_address).map_err(|e| anyhow!("invalid pool address: {}", e))?;
     let rpc = RpcClientV2::new(resolve_rpc_url(config));
-    let amount_y = sol_to_lamports(amount_sol)?;
 
     let pair_account = rpc.get_account(&lb_pair).await?;
     let lb_pair_state: CLbPair = commons::pod_read_unaligned_skip_disc(&pair_account.data)
@@ -782,6 +1018,40 @@ pub async fn deploy_position_commons(
     // rejected as ExceededBinSlippageTolerance.
     let active_id = lb_pair_state.active_id;
     let (min_bin_id, max_bin_id, width) = bin_range(active_id, bins_below, bins_above)?;
+
+    // A balanced deposit needs bins on both sides of the active one, or the base
+    // token has a single bin to sit in and almost all of it stays in the wallet.
+    if dual_side && bins_above <= 0 {
+        anyhow::bail!(
+            "dual-side deploy needs bins above the active bin (got bins_above={}); \
+             pass --bins-above or set management.dualSideBinsAbove",
+            bins_above
+        );
+    }
+
+    // The X side is the pool's base token. Buy it before the deposit is built —
+    // live only; simulation sizes from the wallet's existing balance.
+    let base_mint = lb_pair_state.token_x_mint.to_string();
+    let entry = if dual_side {
+        Some(
+            acquire_base_token(
+                &base_mint,
+                amount_sol,
+                config.management.dual_side_base_pct,
+                config.management.dual_side_slippage_bps,
+                config,
+                !simulate_only,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+    let amount_x = entry.as_ref().map(|e| e.amount_x).unwrap_or(0);
+    let amount_y = match entry.as_ref() {
+        Some(e) => e.amount_y,
+        None => sol_to_lamports(amount_sol)?,
+    };
 
     let [token_x_program, token_y_program] = lb_pair_state
         .get_token_programs()
@@ -909,14 +1179,14 @@ pub async fn deploy_position_commons(
         accounts: [main_accounts.to_vec(), bin_arrays].concat(),
         data: commons::dlmm::client::args::AddLiquidityByStrategy2 {
             liquidity_parameter: LiquidityParameterByStrategy {
-                amount_x: 0,
+                amount_x,
                 amount_y,
                 active_id,
                 max_active_bin_slippage: 5,
                 strategy_parameters: CStrategyParams {
                     min_bin_id,
                     max_bin_id,
-                    strategy_type: strategy_type_commons(strategy),
+                    strategy_type: strategy_type_commons(strategy, dual_side),
                     parameteres: [0u8; 64],
                 },
             },
@@ -939,6 +1209,13 @@ pub async fn deploy_position_commons(
         active_id,
         min_bin_id,
         max_bin_id,
+        dual_side,
+        strategy_type: format!("{:?}", strategy_type_commons(strategy, dual_side)),
+        amount_x,
+        amount_y,
+        base_mint: dual_side.then(|| base_mint.clone()),
+        entry_swap_signature: entry.as_ref().and_then(|e| e.swap_signature.clone()),
+        entry_note: entry.as_ref().map(|e| e.note.clone()),
         ..Default::default()
     };
 
