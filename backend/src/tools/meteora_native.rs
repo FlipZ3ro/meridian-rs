@@ -671,6 +671,214 @@ pub async fn claim_fees_commons(
     })
 }
 
+/// Phase 3 (commons migration): close a position through the OFFICIAL SDK —
+/// remove 100% of its liquidity, claim the fees, then close the account, each
+/// as its own transaction, mirroring `cli/src/instructions/{remove_liquidity,
+/// close_position}.rs`.
+///
+/// Same motivation as [`claim_fees_commons`]: wp resolves the user token
+/// accounts internally, and when it picks an uninitialized one the whole close
+/// fails. Here every account is explicit, so a position can always be exited.
+///
+/// Sequenced rather than bundled into one transaction because each step needs
+/// close to the full compute budget on a wide position, and a partial failure
+/// leaves a recoverable state (liquidity out, fees claimable, account still
+/// closable) instead of an all-or-nothing revert.
+pub async fn close_position_commons(
+    position_address: &str,
+    config: &Config,
+) -> Result<NativeCloseResult> {
+    use anchor_lang::{InstructionData, ToAccountMetas};
+    use commons::dlmm::types::{BinLiquidityReduction, RemainingAccountsInfo};
+    use commons::extensions::position::PositionExtension;
+    use solana_client::nonblocking::rpc_client::RpcClient as RpcClientV2;
+    use solana_sdk::compute_budget::ComputeBudgetInstruction;
+    use solana_sdk::instruction::Instruction as InstructionV2;
+    use solana_sdk::signature::Signer as SignerV2;
+    use solana_sdk::transaction::Transaction as TransactionV2;
+
+    let keypair = keypair_v2_from_secret(&wallet_secret_from_env()?)?;
+    let payer = keypair.pubkey();
+    let rpc = RpcClientV2::new(resolve_rpc_url(config));
+
+    // Snapshot what the position is worth before we take it apart — the caller
+    // reports these amounts and they read as zero once the position is empty.
+    let quote = quote_position_state_commons(position_address, config)
+        .await
+        .unwrap_or_default();
+
+    let plan = resolve_claim_accounts(position_address, config).await?;
+    let lb_pair = plan.position_state.lb_pair;
+    let base_mint = plan.lb_pair_state.token_x_mint.to_string();
+
+    // Destination accounts must exist before liquidity or fees are sent to them.
+    let mut setup_ixs: Vec<InstructionV2> = Vec::new();
+    for (ata, mint, token_program) in [
+        (
+            plan.user_token_x,
+            plan.lb_pair_state.token_x_mint,
+            plan.token_program_x,
+        ),
+        (
+            plan.user_token_y,
+            plan.lb_pair_state.token_y_mint,
+            plan.token_program_y,
+        ),
+    ] {
+        if rpc.get_account(&ata).await.is_err() {
+            setup_ixs.push(create_ata_idempotent_ix_v2(
+                &payer,
+                &plan.fee_recipient,
+                &mint,
+                &token_program,
+            ));
+        }
+    }
+    if !setup_ixs.is_empty() {
+        let blockhash = rpc.get_latest_blockhash().await?;
+        let tx =
+            TransactionV2::new_signed_with_payer(&setup_ixs, Some(&payer), &[&keypair], blockhash);
+        let sig = rpc.send_and_confirm_transaction(&tx).await?;
+        tracing::info!(signature = %sig, "commons close: created missing token account(s)");
+    }
+
+    let (event_authority, _) = commons::derive_event_authority_pda();
+    let (bitmap_extension_pda, _) = commons::derive_bin_array_bitmap_extension(lb_pair);
+    // The bitmap extension only exists for pairs wide enough to need it; the
+    // program expects its own id as the "absent" sentinel.
+    let bin_array_bitmap_extension = match rpc.get_account(&bitmap_extension_pda).await {
+        Ok(_) => bitmap_extension_pda,
+        Err(_) => commons::dlmm::ID,
+    };
+
+    let mut signatures: Vec<String> = Vec::new();
+
+    // ── 1. Remove 100% of the liquidity, chunk by chunk ──────────────
+    let remove_accounts = commons::dlmm::client::accounts::RemoveLiquidity2 {
+        position: plan.position_pk,
+        lb_pair,
+        bin_array_bitmap_extension,
+        user_token_x: plan.user_token_x,
+        user_token_y: plan.user_token_y,
+        reserve_x: plan.lb_pair_state.reserve_x,
+        reserve_y: plan.lb_pair_state.reserve_y,
+        token_x_mint: plan.lb_pair_state.token_x_mint,
+        token_x_program: plan.token_program_x,
+        token_y_mint: plan.lb_pair_state.token_y_mint,
+        token_y_program: plan.token_program_y,
+        sender: payer,
+        memo_program: solana_sdk::pubkey::Pubkey::from_str(MEMO_PROGRAM_ID)
+            .expect("valid memo program id"),
+        event_authority,
+        program: commons::dlmm::ID,
+    }
+    .to_account_metas(None);
+
+    for (min_bin_id, max_bin_id) in position_bin_range_chunks(
+        plan.position_state.lower_bin_id,
+        plan.position_state.upper_bin_id,
+    ) {
+        let bin_liquidity_removal: Vec<BinLiquidityReduction> = (min_bin_id..=max_bin_id)
+            .map(|bin_id| BinLiquidityReduction {
+                bin_id,
+                // Full withdrawal: BASIS_POINT_MAX bps == 100% of our share.
+                bps_to_remove: commons::BASIS_POINT_MAX as u16,
+            })
+            .collect();
+        let data = commons::dlmm::client::args::RemoveLiquidity2 {
+            bin_liquidity_removal,
+            remaining_accounts_info: RemainingAccountsInfo { slices: vec![] },
+        }
+        .data();
+        let bin_arrays = plan
+            .position_state
+            .get_bin_array_accounts_meta_coverage_by_chunk(min_bin_id, max_bin_id)
+            .map_err(|e| anyhow!("bin array coverage: {}", e))?;
+        let ix = InstructionV2 {
+            program_id: commons::dlmm::ID,
+            accounts: [remove_accounts.to_vec(), bin_arrays].concat(),
+            data,
+        };
+        let blockhash = rpc.get_latest_blockhash().await?;
+        let tx = TransactionV2::new_signed_with_payer(
+            &[
+                ComputeBudgetInstruction::set_compute_unit_limit(1_400_000),
+                ix,
+            ],
+            Some(&payer),
+            &[&keypair],
+            blockhash,
+        );
+        let sig = rpc
+            .send_and_confirm_transaction(&tx)
+            .await
+            .map_err(|e| anyhow!("commons remove_liquidity failed: {}", e))?;
+        signatures.push(sig.to_string());
+    }
+
+    // ── 2. Claim the fees the position accrued ───────────────────────
+    match claim_fees_commons(position_address, config).await {
+        Ok(claim) => signatures.push(claim.signature),
+        // Non-fatal: an empty position with unclaimed dust should still close.
+        Err(e) => tracing::warn!(error = %e, "commons close: fee claim step failed, continuing"),
+    }
+
+    // ── 3. Close the (now empty) position account ────────────────────
+    let close_accounts = commons::dlmm::client::accounts::ClosePosition2 {
+        sender: payer,
+        rent_receiver: payer,
+        position: plan.position_pk,
+        event_authority,
+        program: commons::dlmm::ID,
+    }
+    .to_account_metas(None);
+    let bin_arrays_all = plan
+        .position_state
+        .get_bin_array_accounts_meta_coverage()
+        .map_err(|e| anyhow!("bin array coverage: {}", e))?;
+    let close_ix = InstructionV2 {
+        program_id: commons::dlmm::ID,
+        accounts: [close_accounts.to_vec(), bin_arrays_all].concat(),
+        data: commons::dlmm::client::args::ClosePosition2 {}.data(),
+    };
+    let blockhash = rpc.get_latest_blockhash().await?;
+    let tx = TransactionV2::new_signed_with_payer(
+        &[
+            ComputeBudgetInstruction::set_compute_unit_limit(1_400_000),
+            close_ix,
+        ],
+        Some(&payer),
+        &[&keypair],
+        blockhash,
+    );
+    let sig = rpc
+        .send_and_confirm_transaction(&tx)
+        .await
+        .map_err(|e| anyhow!("commons close_position failed: {}", e))?;
+    signatures.push(sig.to_string());
+
+    // Removing single-side SOL liquidity returns the principal as wrapped SOL;
+    // sweep it back to native SOL exactly as the wp path does.
+    let unwrap_signature = match unwrap_all_wsol(config).await {
+        Ok(sig) => sig,
+        Err(e) => {
+            tracing::warn!(error = %e, "commons close: wSOL unwrap failed (funds safe as wSOL)");
+            None
+        }
+    };
+
+    Ok(NativeCloseResult {
+        signature: signatures.join(","),
+        base_mint: Some(base_mint),
+        unwrap_signature,
+        remove_liquidity_amount_x: quote.liquidity_x,
+        remove_liquidity_amount_y: quote.liquidity_y,
+        claimable_fee_x: quote.fee_x,
+        claimable_fee_y: quote.fee_y,
+        claimable_rewards: [0, 0],
+    })
+}
+
 /// Everything `claim_fees_commons` needs to build its instruction, resolved
 /// from chain. Kept as one struct so the read-only preview and the real claim
 /// share a single resolution path — a preview computed by parallel code could
