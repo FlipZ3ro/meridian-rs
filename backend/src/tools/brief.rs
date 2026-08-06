@@ -79,6 +79,135 @@ fn net_of(p: &TrackedPosition) -> f64 {
     p.pnl_usd.unwrap_or(0.0) + p.all_time_fees_usd.unwrap_or(0.0)
 }
 
+/// Minutes between two RFC3339 stamps, if both parse.
+fn minutes_between(from: &str, to: &str) -> Option<i64> {
+    let a = DateTime::parse_from_rfc3339(from).ok()?;
+    let b = DateTime::parse_from_rfc3339(to).ok()?;
+    Some((b - a).num_minutes().max(0))
+}
+
+/// How far below entry the position's range reached, in percent. A 48-bin range
+/// at bin_step 100 covers ~38%, a 16-bin range ~15%. Printing it makes a range
+/// that outruns the stop-loss visible instead of merely implied.
+fn range_downside_pct(p: &TrackedPosition) -> Option<f64> {
+    let step = p.bin_step? as f64 / 10_000.0;
+    let bins = (p.upper_bin - p.lower_bin).max(0) as f64;
+    if bins == 0.0 {
+        return None;
+    }
+    Some((1.0 - (1.0 - step).powf(bins)) * 100.0)
+}
+
+/// Out-of-range breakdown. Direction matters more than the count: drifting out
+/// above spot leaves the capital idle as SOL, dropping out below means the SOL
+/// already converted into a token that kept falling. State carries no direction
+/// flag, so it is inferred from the outcome — a position that earned nothing and
+/// ended flat drifted up and away, one that ended red converted on the way down.
+fn oor_section(closed: &[&TrackedPosition], open: &[&TrackedPosition]) -> String {
+    let oor: Vec<&TrackedPosition> = closed
+        .iter()
+        .copied()
+        .filter(|p| Bucket::of(p.close_reason.as_deref().unwrap_or("")) == Bucket::OutOfRange)
+        .collect();
+    let open_oor = open
+        .iter()
+        .filter(|p| p.status == PositionStatus::OutOfRange)
+        .count();
+    if oor.is_empty() && open_oor == 0 {
+        return String::new();
+    }
+
+    let mut out = format!("\n\n↔️ *ANALISA OUT-OF-RANGE* · {} tutup", oor.len());
+    if open_oor > 0 {
+        out.push_str(&format!(" · {open_oor} masih terbuka"));
+    }
+
+    let idle = oor
+        .iter()
+        .filter(|p| p.all_time_fees_usd.unwrap_or(0.0) <= 0.0)
+        .count();
+    let bagged = oor.iter().filter(|p| p.pnl_pct.unwrap_or(0.0) < -1.0).count();
+    if idle > 0 {
+        out.push_str(&format!(
+            "\n🟡 {idle} nganggur (fee nol) — harga naik menjauh, modal diam jadi SOL"
+        ));
+    }
+    if bagged > 0 {
+        out.push_str(&format!(
+            "\n🔴 {bagged} nyangkut — SOL terlanjur jadi token yang terus turun"
+        ));
+    }
+
+    // Time from deploy to leaving the range. The shorter it is, the worse the
+    // range width fits the token's volatility.
+    let mut spans: Vec<i64> = oor
+        .iter()
+        .filter_map(|p| {
+            p.out_of_range_since
+                .as_deref()
+                .and_then(|t| minutes_between(&p.created_at, t))
+        })
+        .collect();
+    spans.sort_unstable();
+    if !spans.is_empty() {
+        out.push_str(&format!(
+            "\n⏱️ keluar range setelah {} (median dari {} posisi)",
+            fmt_dur(spans[spans.len() / 2]),
+            spans.len()
+        ));
+    }
+
+    let widths: Vec<f64> = oor.iter().filter_map(|p| range_downside_pct(p)).collect();
+    if !widths.is_empty() {
+        let avg = widths.iter().sum::<f64>() / widths.len() as f64;
+        out.push_str(&format!("\n📐 range rata-rata −{avg:.0}% dari harga masuk"));
+    }
+    out
+}
+
+/// Impermanent loss, read off the realised price leg. For a single-side SOL
+/// position the price leg *is* the IL: SOL converts into the token as the price
+/// falls, so a red PnL means it converted into something that kept dropping.
+/// Fees are the only thing paying for that risk, which makes the ratio between
+/// the two the number that decides whether the strategy earns its keep.
+fn il_section(closed: &[&TrackedPosition]) -> String {
+    if closed.is_empty() {
+        return String::new();
+    }
+    let gains: f64 = closed.iter().filter_map(|p| p.pnl_usd).filter(|v| *v > 0.0).sum();
+    let losses: f64 = closed.iter().filter_map(|p| p.pnl_usd).filter(|v| *v < 0.0).sum();
+    let fees: f64 = closed
+        .iter()
+        .map(|p| p.all_time_fees_usd.unwrap_or(0.0))
+        .sum();
+
+    let mut out = String::from("\n\n🩸 *ANALISA IL*");
+    out.push_str(&format!(
+        "\nharga  +{:.2} / {:.2} = {:+.2} USD",
+        gains,
+        losses,
+        gains + losses
+    ));
+    out.push_str(&format!("\nfee    {fees:.2} USD"));
+
+    if losses < 0.0 {
+        let cover = fees / losses.abs();
+        out.push_str(&format!(
+            "\ntutup  fee menutup {:.0}% dari rugi harga",
+            cover * 100.0
+        ));
+        out.push_str(if cover >= 1.5 {
+            "\n✅ fee jauh di atas IL — ini yang dicari"
+        } else if cover >= 1.0 {
+            "\n🟡 fee cuma sedikit di atas IL — marjin tipis"
+        } else {
+            "\n🔴 IL melebihi fee — posisi kelamaan ditahan atau range kelebaran"
+        });
+    }
+    out.push_str("\n_fee dari API Meteora — cek saldo wallet buat angka pastinya_");
+    out
+}
+
 pub fn render(state_path: &str) -> String {
     let state = match PositionState::load(state_path) {
         Ok(s) => s,
@@ -208,6 +337,8 @@ pub fn render(state_path: &str) -> String {
         }
     }
 
+    out.push_str(&oor_section(&closed_24h, &open));
+    out.push_str(&il_section(&closed_24h));
     out.push_str(&analysis(&closed_24h, &open));
     out
 }
