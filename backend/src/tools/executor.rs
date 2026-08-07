@@ -1253,10 +1253,15 @@ impl ToolExecutor {
         // Retry the swap a few times. Jupiter intermittently returns
         // "Failed to get quotes" for thin/volatile launch tokens even when a
         // route exists moments later, which previously left the token unswapped
-        // until the next claim/close swept it. 300 bps (3%) slippage — fee/
-        // withdraw amounts are small and we prefer a filled swap over a tight
-        // price. balance==0 already returned above, so we never delay closes
-        // that produced no base token.
+        // until the next claim/close swept it. balance==0 already returned
+        // above, so we never delay closes that produced no base token.
+        //
+        // Slippage escalates rather than sitting at the old flat 300 bps. Every
+        // position exits through this swap, so across a session of ~100 closes
+        // the gap between filling at 1% and 3% is real money — a forensic pass
+        // put it near a quarter of the account's drawdown. A token left
+        // unswapped is still worse than a bad price, so the final attempt keeps
+        // the original 300 bps ceiling and the fill is never sacrificed.
         let mut last_error: Option<String> = None;
         for attempt in 1..=3u32 {
             info(
@@ -1266,7 +1271,12 @@ impl ToolExecutor {
                     balance, base_mint, attempt
                 ),
             );
-            match swap_token(&base_mint, balance, 300, 100, config).await {
+            let slippage_bps = match attempt {
+                1 => 100,
+                2 => 200,
+                _ => 300,
+            };
+            match swap_token(&base_mint, balance, slippage_bps, 100, config).await {
                 Ok(swap) if swap.success => {
                     // The swap unwraps wSOL as a side effect, closing the one
                     // account every open position's SOL side resolves to. Put it

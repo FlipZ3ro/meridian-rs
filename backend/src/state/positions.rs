@@ -1182,6 +1182,7 @@ mod tests {
     fn test_config() -> Config {
         Config {
             management: ManagementConfig {
+                skip_token_2022: false,
                 deploy_amount_sol: 0.5,
                 gas_reserve: 0.2,
                 position_size_pct: 0.35,
