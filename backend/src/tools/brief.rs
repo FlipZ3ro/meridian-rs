@@ -75,12 +75,18 @@ fn name_of(p: &TrackedPosition) -> String {
 
 /// Score a position on its price leg alone.
 ///
-/// This used to add all_time_fees_usd on top. That reads as fee income but is
-/// the pool API's own accounting, and it has never reconciled with the wallet:
-/// a session it scored at +$40 left the wallet up about $2. Summing it into the
-/// headline made every report flatter the day and hid a real drawdown for
-/// hours. The estimate still appears below, labelled for what it is, but the
-/// number a decision hangs on is now one that reconciles.
+/// This used to add all_time_fees_usd on top, which double-counted: pnl already
+/// contains the fees. Meteora's own numbers for a GOBLIN-SOL close settle it —
+/// deposit $36.91, withdraw $33.20, fees earned $1.42, and the reported PnL of
+/// -$2.30 is exactly -3.71 + 1.42. Adding the fee term again is why a session
+/// scored at +$40 left the wallet up about $2.
+///
+/// The fee figure itself is sound (the bot read $1.3533 against Meteora's
+/// $1.42). An earlier reading of this discrepancy blamed the number for being
+/// unreliable, comparing it against claimedSol — but claimedSol is only the SOL
+/// leg, and most fee income arrives as base token: $1.02 of that $1.42 was
+/// GOBLIN. So it is still worth printing next to a pool, just never summed into
+/// a result.
 fn net_of(p: &TrackedPosition) -> f64 {
     p.pnl_usd.unwrap_or(0.0)
 }
@@ -284,8 +290,8 @@ pub fn render(state_path: &str, wallet_sol: Option<f64>, baseline_sol: Option<f6
     };
     let mut out = format!(
         "📋 *BRIEFING HARIAN* — _{} WIB_{}\n\n\
-         💰 *PnL harga 24j:* {:+.2} USD ({}W/{}L) · fee est ~{:.2} USD\n\
-         📗 *Terbuka:* {} · unreal {:+.2} · fee est {:.2}\n\
+         💰 *PnL harga 24j:* {:+.2} USD ({}W/{}L) · fee {:.2} USD (sudah di PnL)\n\
+         📗 *Terbuka:* {} · unreal {:+.2} · fee {:.2}\n\
          🏆 *Lifetime:* {} trade · {}% menang · PnL harga {:+.2} USD",
         wib.format("%Y-%m-%d %H:%M"),
         truth,
