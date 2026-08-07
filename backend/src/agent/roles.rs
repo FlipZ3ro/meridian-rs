@@ -240,9 +240,17 @@ fn get_general_tools(goal: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
+    // The screener is deliberately excluded from the history tools below. Its
+    // toolset is kept lean so it goes straight from get_top_candidates to
+    // deploy_position, and it already sees per-pool outcome through
+    // get_pool_memory — position count, average pnl, win rate, last close
+    // reason and cooldown state — which is the history that matters when
+    // picking a candidate. Cross-run decision logs are a manager/analyst
+    // concern, and the guard against re-entering a bleeder is the cooldown
+    // machinery, not the model remembering to look.
     #[test]
-    fn recent_decisions_tool_is_available_to_all_agent_roles() {
-        for role in [AgentRole::Manager, AgentRole::Screener, AgentRole::General] {
+    fn recent_decisions_tool_is_available_to_manager_and_general_roles() {
+        for role in [AgentRole::Manager, AgentRole::General] {
             let tools = get_tools_for_role(&role, "general status check");
             assert!(
                 tools.iter().any(|tool| tool == "get_recent_decisions"),
@@ -254,8 +262,8 @@ mod tests {
     }
 
     #[test]
-    fn performance_history_tool_is_available_to_all_agent_roles() {
-        for role in [AgentRole::Manager, AgentRole::Screener, AgentRole::General] {
+    fn performance_history_tool_is_available_to_manager_and_general_roles() {
+        for role in [AgentRole::Manager, AgentRole::General] {
             let tools = get_tools_for_role(&role, "show recent performance history");
             assert!(
                 tools.iter().any(|tool| tool == "get_performance_history"),
@@ -267,14 +275,17 @@ mod tests {
     }
 
     #[test]
-    fn top_lper_tools_are_available_for_screener_and_general_study_intent() {
-        let screener_tools = get_tools_for_role(&AgentRole::Screener, "screen pools");
+    fn top_lper_tools_are_available_for_general_study_intent() {
+        // Top-LPer study is per-candidate research: it costs an LLM round-trip
+        // per pool and delays deployment, so it was pulled out of the screener
+        // along with holders/narrative/smart-wallet checks. It stays available
+        // to the general agent, where the cost buys an actual investigation.
         let general_tools = get_tools_for_role(
             &AgentRole::General,
             "study top LPers and LP behavior for this pool",
         );
 
-        for tools in [&screener_tools, &general_tools] {
+        for tools in [&general_tools] {
             for name in ["study_top_lpers", "get_top_lpers"] {
                 assert!(
                     tools.iter().any(|tool| tool == name),

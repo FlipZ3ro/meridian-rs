@@ -511,11 +511,35 @@ impl PoolMemoryStore {
         for entry in self.pools.values() {
             let deploy_count = entry.total_deploys.max(entry.total_positions);
             if deploy_count > 0 || !entry.notes.is_empty() {
+                // Fees alone flatter a pool that loses money: a name can show
+                // fourteen entries and healthy fee income while its closes net
+                // out negative, which is exactly how the screener kept going
+                // back to tokens that had already cut it. avg_pnl_pct and
+                // win_rate are tracked on the entry already, so surface them
+                // next to the fees rather than making the model infer outcome
+                // from fee income.
+                // total_fees_earned accumulates only the SOL leg of each claim,
+                // which is near-zero on single-side SOL positions, so sum the
+                // per-deploy USD figures instead and fall back to SOL when a pool
+                // predates that field.
+                let fees_usd: f64 = entry
+                    .deploys
+                    .iter()
+                    .filter_map(|d| d.fees_earned_usd)
+                    .filter(|v| v.is_finite())
+                    .sum();
+                let fees = if fees_usd > 0.0 {
+                    format!("${fees_usd:.2} fees")
+                } else {
+                    format!("{:.4} SOL fees", entry.total_fees_earned)
+                };
                 let mut line = format!(
-                    "{}: {} positions, {:.4} SOL fees",
+                    "{}: {} positions, {:+.1}% avg pnl, {:.0}% win, {}",
                     entry_display_name(entry),
                     deploy_count,
-                    entry.total_fees_earned
+                    entry.avg_pnl_pct,
+                    entry.win_rate * 100.0,
+                    fees
                 );
                 if let Some(ref reason) = entry.last_close_reason {
                     line += &format!(", last close: {reason}");

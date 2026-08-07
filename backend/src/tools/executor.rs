@@ -979,7 +979,33 @@ impl ToolExecutor {
                                         .and_then(|s| s.get("pnlPct"))
                                         .and_then(Value::as_f64)
                                 }),
+                                // total_fees_claimed only ever holds the SOL leg of a
+                                // claim, and on a single-side SOL position most fee
+                                // income arrives as base token instead — 3 of 105
+                                // closes had a non-zero value here, so pool memory
+                                // recorded ~0 fees for everything and
+                                // is_fee_generating_deploy could never return true,
+                                // leaving repeatDeployCooldown dead from the start.
+                                // all_time_fees_usd carries the pool's own accounting
+                                // (85 of 105) and is the same yardstick across pools,
+                                // which is what ranking and the cooldown gate need.
                                 fees_earned_sol: Some(pos.total_fees_claimed),
+                                fees_earned_usd: pos
+                                    .all_time_fees_usd
+                                    .filter(|v| v.is_finite() && *v > 0.0),
+                                // Fee as a share of position value. pnl_usd and
+                                // pnl_pct describe the same position, so their ratio
+                                // recovers its USD size without a price lookup; skip
+                                // it near zero pnl where the ratio is meaningless.
+                                fee_earned_pct: match (pos.pnl_usd, pos.pnl_pct, pos.all_time_fees_usd) {
+                                    (Some(pnl_usd), Some(pnl_pct), Some(fees))
+                                        if pnl_pct.abs() >= 0.05 && fees > 0.0 =>
+                                    {
+                                        let value_usd = (pnl_usd / pnl_pct * 100.0).abs();
+                                        (value_usd > 0.0).then(|| fees / value_usd * 100.0)
+                                    }
+                                    _ => None,
+                                },
                                 close_reason: Some(reason.to_string()),
                                 strategy: pos
                                     .signal_snapshot
@@ -1113,7 +1139,19 @@ impl ToolExecutor {
                     let reason = args["reason"].as_str().unwrap_or("");
                     let risk_cut = is_risk_cut_reason(reason);
                     let loss_threshold = config.risk.cooldown_loss_pct;
-                    let material_loss = pos.pnl_pct.is_some_and(|pct| pct <= loss_threshold);
+                    // pnl_pct is the normal signal. It is absent whenever the
+                    // position quote failed — permanent for some Token-2022
+                    // positions — and without a fallback such a close sets no
+                    // cooldown at all, letting the screener walk straight back
+                    // into a token that just cut it. Fall back to SOL, scaled to
+                    // the same materiality the percent threshold encodes, so a
+                    // breakeven exit still does not lock a pool for an hour.
+                    let sol_loss_floor =
+                        -(config.management.deploy_amount_sol * loss_threshold.abs() / 100.0);
+                    let material_loss = match pos.pnl_pct {
+                        Some(pct) => pct <= loss_threshold,
+                        None => pos.pnl_sol.is_some_and(|sol| sol <= sol_loss_floor),
+                    };
                     if risk_cut || material_loss {
                         let pool_address = pos.pool_address.clone();
                         let base_mint = pos.base_mint.clone();
