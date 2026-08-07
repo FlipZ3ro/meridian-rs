@@ -485,8 +485,12 @@ impl PoolMemoryStore {
         for entry in self.pools.values_mut() {
             if entry.base_mint == base_mint {
                 entry.on_cooldown = true;
-                entry.base_mint_cooldown_until = Some(until.clone());
-                entry.base_mint_cooldown_reason = Some(reason.to_string());
+                if let Some(kept) =
+                    keep_longer(entry.base_mint_cooldown_until.as_ref(), until.clone())
+                {
+                    entry.base_mint_cooldown_until = Some(kept);
+                    entry.base_mint_cooldown_reason = Some(reason.to_string());
+                }
             }
         }
     }
@@ -608,6 +612,27 @@ impl PoolMemoryStore {
     }
 }
 
+/// Keep whichever deadline is further out.
+///
+/// Cooldowns are set from two places on the same close: the repeat-loss guard
+/// arms a 24-hour lock inside record_deploy, and a few lines later the executor
+/// stamps its routine 60-minute loss_close. Overwriting unconditionally meant
+/// the second call silently shortened the first, so a token that had earned a
+/// day off was back in the candidate list an hour later — which is why the
+/// repeat-loss guard looked like it never fired when in fact it fired and was
+/// erased every time. A cooldown may be extended, never cut short.
+fn keep_longer(existing: Option<&String>, candidate: String) -> Option<String> {
+    let Some(prev) = existing.and_then(|e| DateTime::parse_from_rfc3339(e).ok()) else {
+        return Some(candidate);
+    };
+    match DateTime::parse_from_rfc3339(&candidate) {
+        Ok(next) if next > prev => Some(candidate),
+        Ok(_) => None,
+        // An unparseable stored deadline is worse than a fresh one.
+        Err(_) => Some(candidate),
+    }
+}
+
 fn set_pool_cooldown_hours(entry: &mut PoolEntry, hours: u32, reason: &str) {
     set_pool_cooldown_minutes(entry, hours.saturating_mul(60), reason);
 }
@@ -615,8 +640,10 @@ fn set_pool_cooldown_hours(entry: &mut PoolEntry, hours: u32, reason: &str) {
 fn set_pool_cooldown_minutes(entry: &mut PoolEntry, minutes: u32, reason: &str) {
     let until = (Utc::now() + Duration::minutes(minutes as i64)).to_rfc3339();
     entry.on_cooldown = true;
-    entry.cooldown_until = Some(until);
-    entry.cooldown_reason = Some(reason.to_string());
+    if let Some(kept) = keep_longer(entry.cooldown_until.as_ref(), until) {
+        entry.cooldown_until = Some(kept);
+        entry.cooldown_reason = Some(reason.to_string());
+    }
 }
 
 fn is_future(ts: &str) -> bool {
@@ -766,6 +793,32 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn a_longer_cooldown_is_never_shortened_by_a_routine_one() {
+        let mut store = PoolMemoryStore::default();
+        store.add_note("pool-x", "MINT_X", Some("X"), "seed");
+
+        // The repeat-loss guard arms a day-long lock, then the routine
+        // 60-minute loss_close lands on the same close a few lines later.
+        store.set_pool_cooldown("pool-x", "repeat losses (2x)", 24 * 60);
+        let long = store
+            .get("pool-x")
+            .and_then(|e| e.cooldown_until.clone())
+            .expect("long cooldown set");
+
+        store.set_pool_cooldown("pool-x", "loss_close", 60);
+        let after = store.get("pool-x").expect("entry");
+        assert_eq!(after.cooldown_until.as_ref(), Some(&long));
+        assert_eq!(after.cooldown_reason.as_deref(), Some("repeat losses (2x)"));
+
+        // Extending further still takes effect.
+        store.set_pool_cooldown("pool-x", "longer", 48 * 60);
+        assert_eq!(
+            store.get("pool-x").and_then(|e| e.cooldown_reason.clone()),
+            Some("longer".to_string())
+        );
+    }
+
     // Both closes sit above REPEAT_LOSS_THRESHOLD_PCT so the repeat-loss guard
     // stays out of it — otherwise its reason overwrites this one and the OOR
     // rule becomes untestable at the very case it exists for. A pool can leave
