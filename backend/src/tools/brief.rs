@@ -363,6 +363,7 @@ pub fn render(state_path: &str, wallet_sol: Option<f64>, baseline_sol: Option<f6
         }
     }
 
+    out.push_str(&drift_section(&closed_24h));
     out.push_str(&oor_section(&closed_24h, &open));
     out.push_str(&il_section(&closed_24h));
     out.push_str(&analysis(&closed_24h, &open));
@@ -458,6 +459,55 @@ fn analysis(closed: &[&TrackedPosition], open: &[&TrackedPosition]) -> String {
         for f in fixes {
             out.push_str(&format!("\n• {f}"));
         }
+    }
+    out
+}
+
+/// How far the reading an exit fired on sat from where the position settled.
+///
+/// Exit rules act on the live open-position quote; the withdrawal lands
+/// somewhere else. A Tanisha-SOL stop-loss triggered at -7.04% and settled at
+/// -3.35%, cutting a position that never reached the -6% it was cut for. One
+/// case proves nothing — a memecoin can genuinely move three points in the
+/// seconds around a close — so this prints the running gap. A drift that stays
+/// one-sided says the trigger reading is biased and the thresholds are being
+/// applied to a number that is not the outcome; a drift that scatters around
+/// zero says the exits are landing on real prices and the noise is the market.
+fn drift_section(closed: &[&TrackedPosition]) -> String {
+    let pairs: Vec<(f64, f64)> = closed
+        .iter()
+        .filter_map(|p| Some((p.pnl_pct?, p.settled_pnl_pct?)))
+        .collect();
+    if pairs.is_empty() {
+        return String::new();
+    }
+    let drifts: Vec<f64> = pairs.iter().map(|(t, s)| s - t).collect();
+    let avg = drifts.iter().sum::<f64>() / drifts.len() as f64;
+    let optimistic = drifts.iter().filter(|d| **d > 0.1).count();
+    let pessimistic = drifts.iter().filter(|d| **d < -0.1).count();
+
+    let mut out = format!(
+        "
+
+🎯 *AKURASI TRIGGER* · {} sampel
+rata-rata drift {:+.2}pp · {} settle lebih baik · {} lebih buruk",
+        pairs.len(),
+        avg,
+        optimistic,
+        pessimistic
+    );
+    for (t, s) in pairs.iter().take(5) {
+        out.push_str(&format!("
+trigger {t:+.2}% → settle {s:+.2}% ({:+.2}pp)", s - t));
+    }
+    if pairs.len() >= 5 && avg.abs() >= 1.0 {
+        out.push_str(if avg > 0.0 {
+            "
+⚠️ trigger konsisten lebih pesimis — exit kemungkinan kecepetan"
+        } else {
+            "
+⚠️ trigger konsisten lebih optimis — exit kemungkinan kelewatan"
+        });
     }
     out
 }

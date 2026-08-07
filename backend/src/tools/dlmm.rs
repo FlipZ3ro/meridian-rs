@@ -797,6 +797,71 @@ pub async fn get_my_positions(wallet_address: &str, _config: &Config) -> Result<
 /// Get PnL and fee information for a specific position.
 ///
 /// Calls the Meteora DLMM PnL API for the given pool and position.
+/// What a position actually settled at, read back after it closed.
+///
+/// The exit rules fire on the live `status=open` reading, and that reading can
+/// sit well below where the withdrawal lands: a Tanisha-SOL stop-loss triggered
+/// on -7.04% and settled at -3.35%, a position that never reached the -6%
+/// threshold it was cut for. Whether that gap is real price movement inside the
+/// seconds around a close, or a difference between the open and closed views,
+/// cannot be told apart from one side alone. So record both and let the drift
+/// accumulate into an answer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SettledPnl {
+    pub pnl_usd: Option<f64>,
+    pub pnl_sol: Option<f64>,
+    pub pnl_pct: Option<f64>,
+    pub fees_usd: Option<f64>,
+}
+
+/// Fetch the settled numbers for a closed position. Meteora indexes a close a
+/// little after the transaction lands, so this retries briefly; returning None
+/// costs nothing but the comparison for that one position.
+pub async fn fetch_settled_pnl(
+    pool_address: &str,
+    position_address: &str,
+    wallet_address: &str,
+) -> Option<SettledPnl> {
+    let wallet = wallet_address;
+    let client = make_client();
+    let url = format!(
+        "{}/positions/{}/pnl?user={}&status=closed&pageSize=100&page=1",
+        METEORA_DLMM_API, pool_address, wallet,
+    );
+    for attempt in 0..3u32 {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        }
+        let Ok(resp) = client.get(&url).send().await else {
+            continue;
+        };
+        if !resp.status().is_success() {
+            continue;
+        }
+        let Ok(parsed) = resp.json::<PnlPoolResponse>().await else {
+            continue;
+        };
+        let found = parsed.positions.unwrap_or_default().into_iter().find(|p| {
+            p.position_address.as_deref() == Some(position_address)
+                || p.address.as_deref() == Some(position_address)
+                || p.position.as_deref() == Some(position_address)
+        });
+        if let Some(p) = found {
+            return Some(SettledPnl {
+                pnl_usd: p.pnl_usd,
+                pnl_sol: p.pnl_sol,
+                pnl_pct: p.pnl_pct_change,
+                fees_usd: p
+                    .all_time_fees
+                    .as_ref()
+                    .and_then(|f| f.total.as_ref())
+                    .and_then(|t| t.usd),
+            });
+        }
+    }
+    None
+}
+
 pub async fn get_position_pnl(
     pool_address: &str,
     position_address: &str,

@@ -946,6 +946,40 @@ impl ToolExecutor {
                         let reason = args["reason"].as_str().unwrap_or("agent decision");
                         let pnl = pos.pnl_sol.unwrap_or(0.0);
                         positions.record_close(&pos.id, pnl, Some(reason));
+
+                        // Read back what the close actually settled at. The exit
+                        // rules fired on the live open-position quote, and the two
+                        // readings can disagree by several points; storing both is
+                        // the only way to tell a genuine cut from one taken on a
+                        // reading the withdrawal never matched.
+                        {
+                            if let Some(settled) = crate::tools::dlmm::fetch_settled_pnl(
+                                &pos.pool_address,
+                                &pos.id,
+                                &self.wallet_address,
+                            )
+                            .await
+                            {
+                                if let Some(p) = positions.positions.get_mut(&pos.id) {
+                                    p.settled_pnl_pct = settled.pnl_pct;
+                                    p.settled_pnl_usd = settled.pnl_usd;
+                                    p.settled_fees_usd = settled.fees_usd;
+                                }
+                                if let (Some(trigger), Some(actual)) = (pos.pnl_pct, settled.pnl_pct)
+                                {
+                                    info(
+                                        "executor",
+                                        &format!(
+                                            "settled {:.2}% vs trigger {:.2}% (drift {:+.2}pp) on {}",
+                                            actual,
+                                            trigger,
+                                            actual - trigger,
+                                            pos.pool_name.as_deref().unwrap_or(&pos.pool_address)
+                                        ),
+                                    );
+                                }
+                            }
+                        }
                         // Persist immediately so the closed position drops off the
                         // Open tab right away instead of lingering until the
                         // cycle-end save.

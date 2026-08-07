@@ -163,6 +163,17 @@ pub struct TrackedPosition {
     pub close_reason: Option<String>,
     #[serde(default)]
     pub closed_at: Option<String>,
+    /// What the position actually settled at, read back from Meteora after the
+    /// close landed. The exit rules fire on the live open-position reading, and
+    /// the two can disagree sharply — a stop-loss triggered at -7.04% settled at
+    /// -3.35%, cutting a position that never reached its -6% threshold. Storing
+    /// both turns that into something measurable instead of anecdote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settled_pnl_pct: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settled_pnl_usd: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settled_fees_usd: Option<f64>,
     #[serde(default)]
     pub trailing: TrailingState,
     /// Pre-deploy signal snapshot (arbitrary JSON for metrics at deploy time)
@@ -215,6 +226,9 @@ impl Default for TrackedPosition {
             pnl_updated_at: None,
             close_reason: None,
             closed_at: None,
+            settled_pnl_pct: None,
+            settled_pnl_usd: None,
+            settled_fees_usd: None,
             trailing: TrailingState::default(),
             signal_snapshot: None,
             last_managed_at: None,
