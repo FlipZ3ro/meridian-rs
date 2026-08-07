@@ -11,6 +11,7 @@ pub mod gmgn;
 pub mod lpagent;
 pub mod meteora_native;
 pub mod quickflip;
+pub mod rpc_health;
 pub mod screening;
 pub mod smart_wallets;
 pub mod study;

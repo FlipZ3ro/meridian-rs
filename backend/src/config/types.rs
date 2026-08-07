@@ -475,6 +475,9 @@ pub struct ApiConfig {
     pub helius_api_key: Option<String>,
     #[serde(default)]
     pub helius_rpc_url: Option<String>,
+    /// Spare RPC endpoints, tried in order when the primary stops answering.
+    #[serde(default)]
+    pub rpc_fallback_urls: Vec<String>,
     #[serde(default)]
     pub agent_meridian_base: Option<String>,
     #[serde(default)]

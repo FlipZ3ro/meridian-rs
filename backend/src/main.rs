@@ -463,6 +463,12 @@ async fn main() -> Result<()> {
         });
     }
 
+    // RPC heartbeat: alert + fail over before a dead endpoint blinds the bot.
+    let rpc_health_config = config.clone();
+    tokio::spawn(async move {
+        tools::rpc_health::monitor(rpc_health_config).await;
+    });
+
     info("main", "Starting cycle scheduler...");
 
     // ── PnL Poller (every 30s, lightweight, no LLM) ───────────

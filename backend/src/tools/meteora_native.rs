@@ -138,14 +138,9 @@ pub fn wallet_pubkey_from_env() -> Result<String> {
 }
 
 pub fn resolve_rpc_url(config: &Config) -> String {
-    config
-        .api
-        .helius_rpc_url
-        .clone()
-        .or_else(|| std::env::var("HELIUS_RPC_URL").ok())
-        .or_else(|| std::env::var("RPC_URL").ok())
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| DEFAULT_RPC_URL.to_string())
+    // Routed through rpc_health so a failover moves every caller at once
+    // instead of leaving each call site pinned to a dead endpoint.
+    crate::tools::rpc_health::active_url(config).unwrap_or_else(|| DEFAULT_RPC_URL.to_string())
 }
 
 fn parse_pubkey(label: &str, value: &str) -> Result<Pubkey> {
