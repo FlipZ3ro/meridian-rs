@@ -11,7 +11,7 @@ const LOW_YIELD_COOLDOWN_HOURS: u32 = 4;
 // Repeat-loss guard: a base token that closes at a loss this many times (across
 // ALL its pools) while net-negative is a systematic bleeder — cool it down hard
 // at the token level so the screener stops re-deploying into it.
-const REPEAT_LOSS_TRIGGER: usize = 2;
+const REPEAT_LOSS_TRIGGER: usize = 3;
 const REPEAT_LOSS_COOLDOWN_HOURS: u32 = 24;
 // Churn guard: repeatedly opening AND closing the same token within this many
 // seconds is pointless churn (burns fees/gas). Fast <1min closes often never
@@ -396,9 +396,16 @@ impl PoolMemoryStore {
 
         // Repeat-loss guard (token-level, across ALL pools of this base mint).
         // SUPERMAN lost across its 80- and 100-bin-step pools — a per-pool count
-        // never catches that, so aggregate by base token. If the token has at
-        // least REPEAT_LOSS_TRIGGER losing closes AND is net-negative overall,
-        // cool the whole token down so the bot stops re-entering a known bleeder.
+        // never catches that, so aggregate by base token. REPEAT_LOSS_TRIGGER
+        // losing closes cool the whole token down.
+        //
+        // The count alone decides it. Requiring the token to also be net-negative
+        // in summed percent let the worst repeaters through: STONK stopped out
+        // four times across fourteen entries, but a couple of winners kept its
+        // total positive, so the guard never armed and the screener kept going
+        // back. Summed percent is the wrong yardstick anyway — it treats a +12%
+        // winner as cancelling three -6% cuts, when the cuts are what set the
+        // pace of the drawdown.
         if let Some(base_mint) = input.base_mint.as_deref() {
             if !base_mint.is_empty() {
                 let (loss_count, net_pnl) = self
@@ -413,7 +420,7 @@ impl PoolMemoryStore {
                             s + p,
                         )
                     });
-                if loss_count >= REPEAT_LOSS_TRIGGER && net_pnl < 0.0 {
+                if loss_count >= REPEAT_LOSS_TRIGGER {
                     pending_base_cooldowns.push((
                         base_mint.to_string(),
                         REPEAT_LOSS_COOLDOWN_HOURS,

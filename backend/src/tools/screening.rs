@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use reqwest::Client;
 
 const POOL_DISCOVERY_BASE: &str = "https://pool-discovery-api.datapi.meteora.ag";
+const WSOL_MINT: &str = "So11111111111111111111111111111111111111112";
 const MIN_VOLATILITY_TIMEFRAME: &str = "30m";
 const PVP_MIN_ACTIVE_TVL: f64 = 5_000.0;
 const PVP_MIN_HOLDERS: u64 = 500;
@@ -500,6 +501,23 @@ pub fn single_candidate_skip_reason(candidate: &CondensedPool) -> Option<String>
 pub fn raw_pool_screening_reject_reason(pool: &RawPool, s: &ScreeningConfig) -> Option<String> {
     let base = pool.token_x.as_ref();
     let quote = pool.token_y.as_ref();
+
+    // Single-side SOL is the only shape this bot deploys, and the on-chain path
+    // needs SOL on the token_y side. A USDC-quoted pool can never be filled: it
+    // passes screening, reaches deploy, fails with "SOL-quoted pools only", and
+    // is picked again on the next cycle — one such pool burned 25 consecutive
+    // attempts. Rejecting it here keeps the candidate slot for something the
+    // deploy path can actually take. Pools that do not report a quote address
+    // are left alone; deploy re-validates on-chain anyway.
+    if let Some(addr) = quote.and_then(|q| q.address.as_deref()) {
+        if addr != WSOL_MINT {
+            let label = quote
+                .and_then(|q| q.symbol.as_deref())
+                .unwrap_or(addr);
+            return Some(format!("quote is {label}, not SOL — single-side SOL cannot deploy"));
+        }
+    }
+
     let mcap = base.and_then(|b| b.market_cap).or(pool.base_token_mcap);
     let holders = pool.base_token_holders;
     let tvl = pool.tvl.or(pool.active_tvl);
