@@ -311,6 +311,7 @@ async fn main() -> Result<()> {
 
     let config = load_config(None)?;
     info("main", "Config loaded");
+    cycle::restore_trading_enabled();
 
     let creds = LlmCredentials::from_env_or_config(
         Some(&config.llm.base_url),

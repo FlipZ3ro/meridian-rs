@@ -429,7 +429,20 @@ async fn handle(
             Err(e) => format!("⚠️ {e}"),
         },
         "positions" => fmt_state_positions(state_path),
-        "brief" => crate::tools::brief::render(state_path),
+        "brief" => {
+            // Fetch the live balance so the brief can lead with it; a failed
+            // lookup degrades to the state-only view rather than blocking.
+            let wallet_sol = run_json("balance", &[], config, state_path)
+                .await
+                .ok()
+                .and_then(|v| {
+                    v.pointer("/data/sol")
+                        .or_else(|| v.pointer("/sol"))
+                        .or_else(|| v.pointer("/data/balance"))
+                        .and_then(serde_json::Value::as_f64)
+                });
+            crate::tools::brief::render(state_path, wallet_sol, config.management.baseline_sol)
+        }
         "candidates" => {
             let lim = rest.first().cloned().unwrap_or_else(|| "8".to_string());
             match run_json("candidates", &["--limit".to_string(), lim], config, state_path).await

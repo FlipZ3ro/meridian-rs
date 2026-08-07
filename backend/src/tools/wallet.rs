@@ -880,6 +880,13 @@ fn dust_sweep_gate() -> &'static std::sync::Mutex<Option<std::time::Instant>> {
 /// no other transaction can observe it missing. Fees claimed from a live
 /// position arrive partly as wSOL, so gating this on a flat wallet left that
 /// SOL wrapped indefinitely — the bot almost always holds positions.
+/// Below this the swap costs more than it recovers, so the remainder is left
+/// alone rather than retried every sweep.
+const DUST_MIN_USD: f64 = 0.05;
+/// Fallback when a mint has no price: an amount this small cannot be worth the
+/// gas regardless of what the token is.
+const DUST_MIN_BALANCE: f64 = 0.001;
+
 pub async fn sweep_dust_to_sol(
     config: &Config,
     keep_mints: &std::collections::HashSet<String>,
@@ -955,6 +962,18 @@ pub async fn sweep_dust_to_sol(
     for t in &balances.tokens {
         let mint = normalize_mint(&t.mint);
         if mint == SOL_MINT || t.balance <= 0.0 {
+            continue;
+        }
+        // Skip leftovers worth less than the gas to move them. Without this the
+        // sweeper retried the same 0.000001-token remainders every cycle,
+        // forever: the swap either fails or returns less than it costs, and the
+        // balance never reaches zero, so the next cycle sees it again. Where the
+        // price is unknown, fall back to a raw-amount floor.
+        let worthless = match t.usd {
+            Some(usd) if usd.is_finite() => usd < DUST_MIN_USD,
+            _ => t.balance < DUST_MIN_BALANCE,
+        };
+        if worthless {
             continue;
         }
         if keep_mints.contains(&mint) || keep_mints.contains(&t.mint) {

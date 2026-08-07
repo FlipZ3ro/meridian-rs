@@ -695,9 +695,41 @@ fn build_screening_goal(
 /// matching how `quickflip::QUICKFLIP_ENABLED` is shared on this branch.
 pub static TRADING_ENABLED: AtomicBool = AtomicBool::new(true);
 
-/// Pause or resume opening new positions.
+/// Where the pause survives a restart. A `/stop` that evaporates on the next
+/// deploy is worse than no pause at all: the operator believes the bot is
+/// halted, pm2 restarts it for any reason, and it resumes opening positions
+/// unattended.
+fn trading_flag_path() -> std::path::PathBuf {
+    crate::config::meridian_data_path("trading-enabled.json")
+}
+
+/// Pause or resume opening new positions, persisting the choice.
 pub fn set_trading_enabled(on: bool) {
     TRADING_ENABLED.store(on, Ordering::SeqCst);
+    let path = trading_flag_path();
+    if let Err(e) = std::fs::write(&path, if on { "true" } else { "false" }) {
+        crate::utils::logger::module::warn(
+            "cycle",
+            &format!("could not persist trading flag to {}: {e}", path.display()),
+        );
+    }
+}
+
+/// Restore the persisted pause at startup. Absent or unreadable file means
+/// enabled, matching the static's default.
+pub fn restore_trading_enabled() {
+    let path = trading_flag_path();
+    let on = match std::fs::read_to_string(&path) {
+        Ok(raw) => raw.trim() != "false",
+        Err(_) => true,
+    };
+    TRADING_ENABLED.store(on, Ordering::SeqCst);
+    if !on {
+        crate::utils::logger::module::info(
+            "cycle",
+            "Trading is paused from a previous session — send /start to resume",
+        );
+    }
 }
 
 /// Whether the bot may open new positions.

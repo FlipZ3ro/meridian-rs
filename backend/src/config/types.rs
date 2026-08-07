@@ -184,6 +184,11 @@ fn default_avoid_pvp_symbols() -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ManagementConfig {
+    /// Wallet SOL at the start of the current measurement run. The brief prints
+    /// live balance against this so the headline is a number the chain can
+    /// confirm, rather than one derived from the bot's own bookkeeping.
+    #[serde(default)]
+    pub baseline_sol: Option<f64>,
     pub deploy_amount_sol: f64,
     pub gas_reserve: f64,
     pub position_size_pct: f64,
@@ -745,6 +750,7 @@ impl Default for Config {
                 block_pvp_symbols: false,
             },
             management: ManagementConfig {
+                baseline_sol: None,
                 deploy_amount_sol: 0.5,
                 gas_reserve: 0.2,
                 position_size_pct: 0.35,

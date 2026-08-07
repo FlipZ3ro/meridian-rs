@@ -73,10 +73,16 @@ fn name_of(p: &TrackedPosition) -> String {
         .unwrap_or_else(|| "?".into())
 }
 
-/// Net is PnL plus fees: fees routinely turn a red percentage into a profitable
-/// trade, so scoring on PnL alone misreads the day.
+/// Score a position on its price leg alone.
+///
+/// This used to add all_time_fees_usd on top. That reads as fee income but is
+/// the pool API's own accounting, and it has never reconciled with the wallet:
+/// a session it scored at +$40 left the wallet up about $2. Summing it into the
+/// headline made every report flatter the day and hid a real drawdown for
+/// hours. The estimate still appears below, labelled for what it is, but the
+/// number a decision hangs on is now one that reconciles.
 fn net_of(p: &TrackedPosition) -> f64 {
-    p.pnl_usd.unwrap_or(0.0) + p.all_time_fees_usd.unwrap_or(0.0)
+    p.pnl_usd.unwrap_or(0.0)
 }
 
 /// Minutes between two RFC3339 stamps, if both parse.
@@ -208,7 +214,7 @@ fn il_section(closed: &[&TrackedPosition]) -> String {
     out
 }
 
-pub fn render(state_path: &str) -> String {
+pub fn render(state_path: &str, wallet_sol: Option<f64>, baseline_sol: Option<f64>) -> String {
     let state = match PositionState::load(state_path) {
         Ok(s) => s,
         Err(e) => return format!("⚠️ tidak bisa baca state: {e}"),
@@ -263,13 +269,27 @@ pub fn render(state_path: &str) -> String {
         .count();
 
     let wib = Utc::now() + Duration::hours(7);
+
+    // Lead with the wallet. Everything else here is derived from state the bot
+    // wrote about itself; this is the chain's answer, and when the two disagree
+    // the chain is right.
+    let truth = match (wallet_sol, baseline_sol) {
+        (Some(now), Some(base)) => {
+            format!("
+💼 *Wallet:* {now:.4} SOL vs modal {base:.4} = *{:+.4} SOL*", now - base)
+        }
+        (Some(now), None) => format!("
+💼 *Wallet:* {now:.4} SOL"),
+        _ => String::new(),
+    };
     let mut out = format!(
-        "📋 *BRIEFING HARIAN* — _{} WIB_\n\n\
-         💰 *PnL 24j:* {:+.2} USD ({}W/{}L) · fee ~{:.2} USD\n\
-         📗 *Terbuka:* {} · unreal {:+.2} · fee {:.2}\n\
-         🏆 *Lifetime:* {} trade · {}% menang · net {:+.2} USD",
+        "📋 *BRIEFING HARIAN* — _{} WIB_{}\n\n\
+         💰 *PnL harga 24j:* {:+.2} USD ({}W/{}L) · fee est ~{:.2} USD\n\
+         📗 *Terbuka:* {} · unreal {:+.2} · fee est {:.2}\n\
+         🏆 *Lifetime:* {} trade · {}% menang · PnL harga {:+.2} USD",
         wib.format("%Y-%m-%d %H:%M"),
-        pnl_24h + fees_24h,
+        truth,
+        pnl_24h,
         wins,
         losses,
         fees_24h,
