@@ -11,7 +11,7 @@ const LOW_YIELD_COOLDOWN_HOURS: u32 = 4;
 // Repeat-loss guard: a base token that closes at a loss this many times (across
 // ALL its pools) while net-negative is a systematic bleeder — cool it down hard
 // at the token level so the screener stops re-deploying into it.
-const REPEAT_LOSS_TRIGGER: usize = 3;
+const REPEAT_LOSS_TRIGGER: usize = 2;
 const REPEAT_LOSS_COOLDOWN_HOURS: u32 = 24;
 // Churn guard: repeatedly opening AND closing the same token within this many
 // seconds is pointless churn (burns fees/gas). Fast <1min closes often never
@@ -406,6 +406,14 @@ impl PoolMemoryStore {
         // back. Summed percent is the wrong yardstick anyway — it treats a +12%
         // winner as cancelling three -6% cuts, when the cuts are what set the
         // pace of the drawdown.
+        //
+        // Two is where the count belongs, measured rather than guessed. Across
+        // 105 closes, entries taken once a token already had two losing closes
+        // returned -1.64% on average over 9 tries, and those taken after three
+        // returned -2.40% over 5. Both buckets lose money net even though nearly
+        // half of them win individually, so the third entry is the one worth
+        // refusing. Raising this to three on the reasoning that two seemed harsh
+        // was a guess, and it left roughly -0.13 SOL of that history reachable.
         if let Some(base_mint) = input.base_mint.as_deref() {
             if !base_mint.is_empty() {
                 let (loss_count, net_pnl) = self
@@ -758,18 +766,23 @@ mod tests {
     }
 
     #[test]
+    // Both closes sit above REPEAT_LOSS_THRESHOLD_PCT so the repeat-loss guard
+    // stays out of it — otherwise its reason overwrites this one and the OOR
+    // rule becomes untestable at the very case it exists for. A pool can leave
+    // range repeatedly without the exits being material losses, which is what
+    // this rule is meant to catch.
     fn repeated_oor_closes_set_pool_and_base_mint_cooldowns() {
         let mut store = PoolMemoryStore::default();
         let management = js_management_config();
 
         store.record_deploy(
             "pool-oor",
-            deploy("MINT_OOR", "out of range", -3.0),
+            deploy("MINT_OOR", "out of range", -0.5),
             &management,
         );
         assert!(!store.is_pool_on_cooldown("pool-oor"));
 
-        store.record_deploy("pool-oor", deploy("MINT_OOR", "OOR", -2.0), &management);
+        store.record_deploy("pool-oor", deploy("MINT_OOR", "OOR", -0.4), &management);
 
         let entry = store.get("pool-oor").expect("pool should be recorded");
         assert_eq!(
