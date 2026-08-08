@@ -63,17 +63,18 @@ bleeder costs about 0.13 SOL per 14 entries.
 | Setting | Value |
 |---|---|
 | `deployAmountSol` / `maxDeployAmount` | `0.5` |
-| `maxPositions` | `3` |
+| `maxPositions` | `4` |
 | `gasReserve` | `0.15` |
 
 Real all-in cost per position is **0.5574 SOL** — 0.5 of liquidity plus ~0.0574
 of rent and fees, measured as the median of 104 deploy transactions. Rent
 returns on close.
 
-Three slots is arithmetic, not preference: at ~2.1 SOL the fourth is
-impossible, and `compute_deploy_amount` refuses it once the gas reserve cannot
-be preserved. Setting it to 4 anyway just burns a screening cycle per minute on
-a slot that can never fill.
+Slot count is arithmetic, not preference. `compute_deploy_amount` refuses a
+deploy once the gas reserve can no longer be preserved, so the ceiling follows
+the balance: at ~2.1 SOL a fourth slot is impossible and setting it anyway just
+burns a screening cycle per minute on something that can never fill; at 2.5 SOL
+four fit with 0.27 left over. Re-check this after any deposit or withdrawal.
 
 Prefer **fewer, larger** positions over more, smaller ones. Fee income depends
 on our share of the *active bin*, so splitting the same capital across more

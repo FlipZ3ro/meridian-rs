@@ -72,7 +72,25 @@ pub async fn run(
     .await;
     info("telegram", "interactive control online");
 
-    let mut offset: i64 = 0;
+    // Start past whatever Telegram still holds instead of at 0. getUpdates with
+    // a zero offset replays every unconfirmed update — up to 24 hours of them —
+    // so a restart re-executed old commands. That is how a /stop sent the day
+    // before silently paused trading again seconds after an operator started
+    // the bot, with nothing in the chat to explain it. Asking for -1 returns
+    // just the most recent update; acknowledging it moves the cursor past the
+    // backlog without running any of it.
+    let mut offset: i64 = match get_updates(&client, &token, -1).await {
+        Ok(updates) => updates
+            .iter()
+            .filter_map(|u| u.get("update_id").and_then(Value::as_i64))
+            .max()
+            .map(|id| {
+                info("telegram", "skipping updates queued before startup");
+                id + 1
+            })
+            .unwrap_or(0),
+        Err(_) => 0,
+    };
     loop {
         match get_updates(&client, &token, offset).await {
             Ok(updates) => {
@@ -161,8 +179,11 @@ pub async fn run(
 }
 
 /// Register the bot's command menu (the "Menu" button / `/` list shown at the
-/// bottom of the chat). `/start` is intentionally omitted — it stays usable if
-/// typed, but doesn't clutter the menu.
+/// bottom of the chat). `/start` sits next to `/stop`: listing the pause without
+/// its counterpart leaves an operator who paused with no visible way back, and
+/// having to remember an unlisted command is a poor thing to discover while
+/// wanting the bot running again. Neither is on the reply keyboard — a stray tap
+/// there would flip live trading.
 async fn set_commands(client: &reqwest::Client, token: &str) {
     let body = serde_json::json!({
         "commands": [
@@ -174,6 +195,7 @@ async fn set_commands(client: &reqwest::Client, token: &str) {
             { "command": "brief",      "description": "Daily brief + anomaly check" },
             { "command": "dryrun",     "description": "Toggle simulated vs live execution" },
             { "command": "quickflip",  "description": "Toggle volume-spike scalper" },
+            { "command": "start",      "description": "Resume new deploys" },
             { "command": "stop",       "description": "Pause new deploys" },
             { "command": "close",      "description": "Close a position" },
             { "command": "help",       "description": "List commands" }
