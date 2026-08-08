@@ -11,8 +11,14 @@ const LOW_YIELD_COOLDOWN_HOURS: u32 = 4;
 // Repeat-loss guard: a base token that closes at a loss this many times (across
 // ALL its pools) while net-negative is a systematic bleeder — cool it down hard
 // at the token level so the screener stops re-deploying into it.
+/// Long enough to break a re-entry streak, short enough that the candidate list
+/// survives it. The screening funnel holds roughly ten distinct tokens at a
+/// time, so a day-long lock on each repeat loser drains the pool faster than
+/// trending pools replace it — seven tokens were locked at once with only four
+/// left enterable. Four hours keeps the guard meaningful without starving the
+/// screener of anything to do.
 const REPEAT_LOSS_TRIGGER: usize = 2;
-const REPEAT_LOSS_COOLDOWN_HOURS: u32 = 24;
+const REPEAT_LOSS_COOLDOWN_HOURS: u32 = 4;
 // Churn guard: repeatedly opening AND closing the same token within this many
 // seconds is pointless churn (burns fees/gas). Fast <1min closes often never
 // record pnl, so the fee-generating / repeat-loss checks miss them (STONK was
