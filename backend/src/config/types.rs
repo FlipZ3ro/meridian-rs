@@ -150,6 +150,13 @@ pub struct ScreeningConfig {
     pub exclude_high_supply_concentration: bool,
     #[serde(default)]
     pub min_token_age_hours: Option<f64>,
+    /// Reject a pool whose base token cannot be sold back to SOL without moving
+    /// the price more than this, in percent. Exit cost is the single largest
+    /// drag on this strategy and it varies by two orders of magnitude between
+    /// pools of similar TVL — 0.045% on one candidate, 6.8% on another — so it
+    /// is measured per pool rather than inferred from depth.
+    #[serde(default = "default_max_exit_price_impact")]
+    pub max_exit_price_impact_pct: f64,
     #[serde(default)]
     pub max_token_age_hours: Option<f64>,
     #[serde(default)]
@@ -722,6 +729,7 @@ impl Default for Config {
         let screening_defaults = super::screening_scales::screening_defaults_for_timeframe("4h");
         Self {
             screening: ScreeningConfig {
+                max_exit_price_impact_pct: default_max_exit_price_impact(),
                 min_fee_active_tvl_ratio: screening_defaults.min_fee_active_tvl_ratio,
                 min_tvl: 10_000.0,
                 max_tvl: None,
@@ -854,4 +862,8 @@ mod tests {
         assert_eq!(config.darwin.weight_ceiling, 2.5);
         assert_eq!(config.darwin.min_samples, 10);
     }
+}
+
+fn default_max_exit_price_impact() -> f64 {
+    0.5
 }

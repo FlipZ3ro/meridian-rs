@@ -667,15 +667,49 @@ impl ToolExecutor {
                         );
                     }
 
+                    // The cost of leaving decides more than the reason for
+                    // entering. Exit cost measured out at 1.49% per round trip
+                    // against an edge of 0.24%, and it is not readable from TVL:
+                    // two candidates $30k apart quoted 0.537% and 6.824%. A pool
+                    // that charges 6.8% to leave cannot be traded profitably on
+                    // any exit rule, so it is refused before entry rather than
+                    // discovered on the way out. A quote failure does not block
+                    // the deploy — being unable to measure is not evidence of a
+                    // bad pool.
+                    let mut impact_note = String::from("n/a");
+                    let limit = config.screening.max_exit_price_impact_pct;
+                    if limit > 0.0 {
+                        if let Ok(base_mint) =
+                            crate::tools::meteora_native::pool_base_mint(config, &pool_addr).await
+                        {
+                            if let Some(impact) = crate::tools::wallet::exit_price_impact_pct(
+                                &base_mint,
+                                config.management.deploy_amount_sol,
+                            )
+                            .await
+                            {
+                                if impact > limit {
+                                    anyhow::bail!(
+                                        "exit price impact {:.3}% above max {:.3}% — selling back would cost more than the trade can earn",
+                                        impact,
+                                        limit
+                                    );
+                                }
+                                impact_note = format!("{impact:.3}%");
+                            }
+                        }
+                    }
+
                     // Inject entry market data for position tracking
                     info(
                         "executor",
                         &format!(
-                            "Deploy pre-flight OK — pool={}, tvl=${:.0}, vol={}, fee_tvl={:.4}",
+                            "Deploy pre-flight OK — pool={}, tvl=${:.0}, vol={}, fee_tvl={:.4}, exit_impact={}",
                             &pool_addr[..12.min(pool_addr.len())],
                             tvl,
                             vol,
-                            fee_tvl
+                            fee_tvl,
+                            impact_note
                         ),
                     );
                 } else {

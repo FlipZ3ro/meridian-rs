@@ -544,6 +544,29 @@ pub async fn resolve_mint_decimals(
         .ok_or_else(|| anyhow!("getTokenSupply returned no decimals for {}", mint))
 }
 
+/// Price impact, in percent, of moving `amount_sol` worth of SOL through this
+/// token's route — a proxy for what it will cost to sell the position back.
+///
+/// Every position exits through a swap, and that cost turned out to dominate
+/// the strategy: measured at 1.49% per round trip against an edge of 0.24%.
+/// It is not predictable from TVL either. Two candidates within $30k of each
+/// other quoted 0.537% and 6.824%. So it gets quoted, not guessed.
+pub async fn exit_price_impact_pct(mint: &str, amount_sol: f64) -> Option<f64> {
+    let lamports = (amount_sol * 1_000_000_000.0).round() as u64;
+    let url = format!(
+        "{}/quote?inputMint={}&outputMint={}&amount={}&slippageBps=300",
+        JUPITER_SWAP_V2_API, SOL_MINT, mint, lamports
+    );
+    let resp = reqwest::Client::new().get(&url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let v: serde_json::Value = resp.json().await.ok()?;
+    v.get("priceImpactPct")
+        .and_then(|x| x.as_str().and_then(|s| s.parse::<f64>().ok()).or_else(|| x.as_f64()))
+        .map(|p| p * 100.0)
+}
+
 pub async fn swap_token(
     mint: &str,
     amount: f64,
