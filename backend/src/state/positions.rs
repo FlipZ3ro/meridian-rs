@@ -335,8 +335,23 @@ impl PositionState {
                             // Closed is terminal — never regress it. Between two
                             // closed copies, keep the one carrying the close
                             // metadata.
-                            pos.status != PositionStatus::Closed
-                                || (d.closed_at.is_some() && pos.closed_at.is_none())
+                            //
+                            // Except when the disk copy is not a close at all.
+                            // record_close always stamps closed_at; a prune marks
+                            // status and nothing else. Treating both as terminal
+                            // made a wrong prune permanent: reconcile would revive
+                            // a position it could still see on-chain, and this
+                            // rule restored the prune on the very next save. A
+                            // live Remus-SOL position sat unmanaged that way — no
+                            // stop-loss, no trailing — because two safeguards
+                            // written weeks apart each did exactly their job.
+                            let disk_close_is_real = d.closed_at.is_some();
+                            if !disk_close_is_real && pos.status != PositionStatus::Closed {
+                                false
+                            } else {
+                                pos.status != PositionStatus::Closed
+                                    || (disk_close_is_real && pos.closed_at.is_none())
+                            }
                         }
                         // Both open: the fresher poll wins, by its own timestamp
                         // rather than by save order.

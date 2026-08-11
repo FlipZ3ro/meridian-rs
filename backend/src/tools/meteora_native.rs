@@ -1878,8 +1878,24 @@ pub async fn existing_positions(
             .get_multiple_accounts(&pubkeys)
             .await
             .map_err(|e| anyhow!("get_multiple_accounts for position reconcile: {}", e))?;
-        for ((id, _), account) in chunk.iter().zip(accounts.into_iter()) {
+        for ((id, pk), account) in chunk.iter().zip(accounts.into_iter()) {
             if account.map(|a| a.lamports > 0).unwrap_or(false) {
+                existing.insert(id.clone());
+            } else if rpc
+                // A miss here decides whether a live position gets pruned out of
+                // management, so it is confirmed with a second, independent read
+                // before being believed. get_multiple_accounts can return None
+                // for an account that exists when the node is a slot behind or
+                // the response comes back partial, and with several fallback
+                // endpoints in rotation that is not rare. One such miss orphaned
+                // a Remus-SOL position holding 0.5 SOL: pruned to closed, then
+                // skipped by adopt because the key was still there, left running
+                // for hours with no stop-loss behind it.
+                .get_account(pk)
+                .await
+                .map(|a| a.lamports > 0)
+                .unwrap_or(false)
+            {
                 existing.insert(id.clone());
             }
         }

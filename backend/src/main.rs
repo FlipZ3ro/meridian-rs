@@ -140,7 +140,31 @@ async fn reconcile_positions_on_chain(
     match tools::meteora_native::discover_wallet_positions(config).await {
         Ok(discovered) => {
             for (pos_id, lb_pair) in discovered {
-                if positions.positions.contains_key(&pos_id) {
+                // A position present on-chain but marked closed in state is not
+                // "already known", it is stranded: prune sets closed on a single
+                // failed lookup, and skipping on key presence alone meant adopt
+                // could never undo it. That combination left a live Remus-SOL
+                // position unmanaged for hours — no stop-loss, no trailing, no
+                // OOR, because the poller only walks active positions. Revive it
+                // instead, and let the next poll re-establish its PnL.
+                if let Some(tracked) = positions.positions.get_mut(&pos_id) {
+                    if tracked.status != state::positions::PositionStatus::Closed {
+                        continue;
+                    }
+                    tracked.status = state::positions::PositionStatus::Active;
+                    tracked.closed_at = None;
+                    tracked.close_reason = None;
+                    tracked.note = Some(
+                        "Revived — found on-chain after being pruned as closed".to_string(),
+                    );
+                    changed += 1;
+                    warn(
+                        "reconcile",
+                        &format!(
+                            "Revived {} — still on-chain but state had it closed",
+                            &pos_id[..8.min(pos_id.len())]
+                        ),
+                    );
                     continue;
                 }
                 let pool_name = tools::dlmm::get_pool_name(&lb_pair).await;
