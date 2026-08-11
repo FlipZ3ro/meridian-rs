@@ -48,6 +48,7 @@ rate is not meaningful; the API has already done the work.
 | `minBinStep` / `maxBinStep` | `20` / `250` | Below 20 the range is too tight to survive memecoin volatility; above 250 each bin is a large price jump. |
 | `minTokenAgeHours` | `6` | Rug proxy, and the most expensive filter we run — it excludes the first hours where fee flow is heaviest. A deliberate risk trade, not a tuned number. |
 | `maxBundlersPct` / `maxTop10Pct` | `20` / `42` | Concentration limits. |
+| `maxExitPriceImpactPct` | `0.5` | The cost of leaving decides more than the reason for entering, and it is not readable from anything else screened — two candidates $30k apart in TVL quoted 0.537% and 6.824%, another at $392k quoted 0.045%. Deploy pre-flight quotes Jupiter for moving `deployAmountSol` through the token and refuses above this. It caught nosis-SOL on its first live cycle at 1.948%, a pool that passed every other check with fee/TVL of 7.84. A quote failure does not block the deploy. Expect far more idling: two of seven sampled candidates cleared 0.5%. |
 | quote must be **wSOL** | enforced locally | The API has no quote filter. A USDC-quoted pool passes every check, reaches deploy, fails with "SOL-quoted pools only", and is picked again next cycle — one such pool burned 25 consecutive attempts. |
 
 **Known limitation.** The funnel holds roughly 10 distinct tokens at a time,
@@ -174,7 +175,7 @@ Measured across 1,186 wallet transactions:
 | Gas, all transactions | **0.0168 SOL** — negligible |
 | Rent held in leftover ATAs | 0.0041 SOL — negligible |
 | Failed transactions | 47, costing 0.0003 SOL |
-| **Swap slippage on exit** | **~0.093 SOL**, roughly a quarter of the drawdown |
+| **Exit cost (measured)** | **1.49% per round trip** — see below |
 
 **Every position exits through a Jupiter swap.** Not one close returns SOL
 directly — the withdrawal comes back as base token, which is then sold. So each
@@ -183,15 +184,39 @@ round trip pays slippage on the way out, and slippage is set at
 when the market allows, widen only for tokens that refuse to fill, never leave a
 token unswapped.
 
-The number that matters: over a 26-close stretch, position PnL was **+0.1174
-SOL** while the wallet moved **−0.0148 SOL**. About **1% per round trip**
-disappears into cost.
+Measured properly over a 43-hour window — wallet change including locked
+capital, against Meteora's own `pnlSol` for the 104 positions closed in it,
+with no deposits to confuse it:
 
-That is the central problem. The strategy has a gross edge; the edge is
-currently smaller than the cost of collecting it. **The lever is fewer
-rotations, not more trades.** Anything that increases turnover — a
-minutes-long scalping variant, more slots, tighter ranges — has to clear that
-1% before it earns anything.
+```
+actual change (balance + locked)   -0.52566 SOL
+Meteora pnlSol, 104 closes         +0.25035 SOL
+──────────────────────────────────────────────
+cost outside Meteora's books        0.77600 SOL
+per position                        0.00746 SOL  = 1.49%
+```
+
+Against a pool-level edge of **+0.00241 SOL per position** (0.25035 / 104),
+so **cost is 3.1× the edge**. Every position opened loses about 0.005 SOL on
+average regardless of how the trade goes.
+
+This is why Meteora reports profit while the wallet does not move. Meteora
+stops counting at the pool boundary: deposit, withdraw, fees. The swap from
+base token back to SOL happens outside it, and that is where the money goes.
+
+**Two things were tried against this and both failed on measurement.**
+
+*Bigger positions* — the hope was that a fixed component of the cost would
+amortise. Jupiter quotes say otherwise: price impact rises with size
+(lickingcat 2.045% at 0.5 SOL, 2.540% at 3.0 SOL), so larger positions cost
+proportionally *more*.
+
+*Longer holds* — the arithmetic was that exit cost is paid once while fees
+accrue with time. The history disagrees. Correlation between hold time and
+PnL is **−0.032**, and the 4–8 hour bucket is the worst of any at −0.021 SOL
+average. IL accumulates with time too, and in memecoins it outruns the fees.
+
+What did work is refusing the expensive pools in the first place.
 
 ---
 
@@ -256,8 +281,15 @@ SOL, not a replacement for the main strategy.
 
 ## 10. Open questions
 
-- **Does the 1% round-trip cost come down?** Escalating slippage is in place but
-  unproven at scale. If it does not, turnover has to fall.
+- **Does `maxExitPriceImpactPct` bring the 1.49% down?** This is the whole
+  question now. Re-run the window measurement — wallet change against Meteora
+  `pnlSol` over a period with no deposits — once enough positions have closed
+  under the filter. Below ~0.24% the strategy is profitable as configured;
+  above it, nothing else in this document matters much.
+- **Is the swap avoidable on re-entry?** 69% of positions are a return to the
+  same token, median 12 minutes after the last one closed — each paying exit
+  and entry cost to reach a position it just left. Roughly 1.1 SOL across the
+  history so far.
 - **What happens to a token after a stop-loss?** Without this we cannot judge
   whether −6% is too tight, too loose, or right.
 - **Is `minTokenAgeHours: 6` worth what it costs?** It excludes the heaviest fee
