@@ -193,6 +193,21 @@ pub async fn run_management_cycle(
                 &format!("dust sweep: swapped {} leftover token(s) back to SOL", swept),
             );
         }
+
+        // Then reclaim the shells the sweep leaves behind. An emptied token
+        // account keeps its ~0.002 SOL of rent until something closes it, and
+        // nothing did: 32 had piled up holding 0.066 SOL, roughly 7% of the free
+        // balance, and the count only grows with each new token traded. Runs
+        // after the sweep so accounts emptied by it are collected in the same
+        // pass; `keep` and wSOL are excluded inside.
+        match crate::tools::meteora_native::reclaim_empty_token_accounts(config, &keep).await {
+            Ok((n, sol)) if n > 0 => info(
+                "cycle",
+                &format!("rent reclaim: closed {n} empty token account(s), recovered {sol:.4} SOL"),
+            ),
+            Ok(_) => {}
+            Err(e) => warn("cycle", &format!("rent reclaim failed: {e}")),
+        }
     }
 
     let mut pos_snapshots: Vec<ManagementPositionSnapshot> = Vec::new();

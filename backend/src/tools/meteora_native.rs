@@ -1476,6 +1476,114 @@ pub async fn ensure_wsol_ata(config: &Config) -> Result<()> {
 /// to native SOL. Safety net for residual wSOL when the per-close unwrap missed
 /// or failed transiently (e.g. a race with a concurrent op). Uses the env
 /// signing keypair. Returns the tx signature, or None if there was no wSOL.
+/// Close empty token accounts and return their rent to the wallet.
+///
+/// Every token the bot touches gets an associated account, and once the
+/// position closes and the balance is swapped away the account stays behind
+/// holding ~0.002 SOL of rent forever. Nothing ever closed them: 32 had
+/// accumulated, locking 0.066 SOL — about 7% of the free balance, growing with
+/// each new token. Small per account, permanent in aggregate.
+///
+/// Only accounts with a zero balance are touched, and `keep_mints` (the base
+/// mint of every open position) plus wSOL are skipped regardless — wSOL is the
+/// account every position's SOL side resolves to, and closing it out from under
+/// an open position is what once produced a run of AccountNotInitialized
+/// failures. Closing is batched, since each one is three accounts and a byte.
+pub async fn reclaim_empty_token_accounts(
+    config: &Config,
+    keep_mints: &std::collections::HashSet<String>,
+) -> Result<(usize, f64)> {
+    use solana_sdk_v3::pubkey::Pubkey as PkV3;
+    let keypair = keypair_from_secret(&wallet_secret_from_env()?)?;
+    let owner = keypair.pubkey();
+    let rpc = RpcClient::new(resolve_rpc_url(config));
+
+    // Account discovery goes over plain JSON-RPC rather than the typed client:
+    // the Pubkey types in the RPC crate and the v3 transaction stack used for
+    // signing are different types with the same name, and bridging them here
+    // buys nothing.
+    let mut victims: Vec<(PkV3, PkV3)> = Vec::new();
+    let mut reclaimable = 0u64;
+    let http = reqwest::Client::new();
+    let rpc_url = resolve_rpc_url(config);
+    for program in [SPL_TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID] {
+        let body = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "getTokenAccountsByOwner",
+            "params": [owner.to_string(), {"programId": program}, {"encoding": "jsonParsed"}]
+        });
+        let Ok(resp) = http.post(&rpc_url).json(&body).send().await else {
+            continue;
+        };
+        let Ok(v) = resp.json::<serde_json::Value>().await else {
+            continue;
+        };
+        let Some(list) = v.pointer("/result/value").and_then(|x| x.as_array()) else {
+            continue;
+        };
+        for acc in list {
+            let info = acc.pointer("/account/data/parsed/info");
+            let amount = info
+                .and_then(|i| i.pointer("/tokenAmount/amount"))
+                .and_then(|a| a.as_str())
+                .and_then(|a| a.parse::<u64>().ok())
+                .unwrap_or(1);
+            if amount != 0 {
+                continue;
+            }
+            let mint = info
+                .and_then(|i| i.get("mint"))
+                .and_then(|m| m.as_str())
+                .unwrap_or_default();
+            if mint.is_empty() || mint == WSOL_MINT || keep_mints.contains(mint) {
+                continue;
+            }
+            let lamports = acc
+                .pointer("/account/lamports")
+                .and_then(|l| l.as_u64())
+                .unwrap_or(0);
+            let (Some(addr), Ok(prog)) = (
+                acc.get("pubkey").and_then(|p| p.as_str()),
+                PkV3::from_str(program),
+            ) else {
+                continue;
+            };
+            let Ok(pk) = PkV3::from_str(addr) else {
+                continue;
+            };
+            reclaimable += lamports;
+            victims.push((pk, prog));
+        }
+    }
+    if victims.is_empty() {
+        return Ok((0, 0.0));
+    }
+
+    let mut closed = 0usize;
+    for chunk in victims.chunks(12) {
+        let ixs: Vec<_> = chunk
+            .iter()
+            .map(|(acc, prog)| close_wsol_account_ix(*prog, *acc, owner))
+            .collect();
+        let blockhash = rpc.get_latest_blockhash().await?;
+        let tx = solana_sdk_v3::transaction::Transaction::new_signed_with_payer(
+            &ixs,
+            Some(&owner),
+            &[&keypair],
+            blockhash,
+        );
+        match rpc.send_and_confirm_transaction(&tx).await {
+            Ok(_) => closed += chunk.len(),
+            Err(e) => {
+                crate::utils::logger::module::warn(
+                    "rent",
+                    &format!("could not close {} empty account(s): {e}", chunk.len()),
+                );
+            }
+        }
+    }
+    Ok((closed, reclaimable as f64 / 1_000_000_000.0))
+}
+
 pub async fn unwrap_all_wsol(config: &Config) -> Result<Option<String>> {
     let keypair = keypair_from_secret(&wallet_secret_from_env()?)?;
     let rpc = RpcClient::new(resolve_rpc_url(config));
