@@ -299,54 +299,6 @@ async fn push_telegram(config: &Config, text: &str) {
     let _ = crate::tools::telegram::send_message_safe(token, chat, text).await;
 }
 
-/// Fingerprint of the last candidate list pushed, so an unchanged shortlist is
-/// not re-sent. Screening runs every few minutes and usually returns the same
-/// handful of names; without this the chat fills with identical messages and
-/// the ones that matter get lost among them.
-static LAST_CANDIDATES: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
-
-/// Push the shortlist the screener just produced, once per distinct list.
-///
-/// Seeing what the bot considered — not only what it took — is what makes an
-/// idle stretch readable: a screener returning nothing and a screener returning
-/// five names that all fail pre-flight look identical from the outside.
-async fn notify_candidates(config: &Config, candidates: &[crate::models::pool::CondensedPool]) {
-    if candidates.is_empty() {
-        return;
-    }
-    let fingerprint = candidates
-        .iter()
-        .map(|c| c.name.as_str())
-        .collect::<Vec<_>>()
-        .join("|");
-    {
-        let Ok(mut last) = LAST_CANDIDATES.lock() else {
-            return;
-        };
-        if last.as_deref() == Some(fingerprint.as_str()) {
-            return;
-        }
-        *last = Some(fingerprint);
-    }
-    let mut text = format!("🔍 *KANDIDAT* · {}
-", candidates.len());
-    for c in candidates.iter().take(8) {
-        text.push_str(&format!(
-            "
-`{:<14}` feeTvl {:>5.1} · tvl ${:.0}k · step {}",
-            c.name.chars().take(14).collect::<String>(),
-            c.fee_active_tvl_ratio,
-            c.tvl / 1000.0,
-            c.bin_step
-        ));
-    }
-    if candidates.len() > 8 {
-        text.push_str(&format!("
-…+{} lagi", candidates.len() - 8));
-    }
-    push_telegram(config, &text).await;
-}
-
 fn log_decision(tool: &str, args: &Value, result: &str, success: bool) {
     if let Err(e) = append_decision_log_entry(&decision_log_path(), tool, args, result, success) {
         warn("executor", &format!("Failed to write decision log: {}", e));
@@ -1647,7 +1599,6 @@ impl ToolExecutor {
                         self.screener
                             .enrich_candidate_fees(&mut result.candidates, config)
                             .await;
-                        notify_candidates(config, &result.candidates).await;
                         Ok(serde_json::to_string_pretty(&result)?)
                     }
                     Err(e) => Ok(format!("{{\"error\": \"{}\"}}", e)),

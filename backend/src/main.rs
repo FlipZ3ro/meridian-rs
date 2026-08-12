@@ -262,13 +262,10 @@ async fn notify_close_to_telegram(
     let pnl_pct = pos.pnl_pct.unwrap_or(0.0);
     let lower = reason.to_ascii_lowercase();
     let is_risk_cut = lower.contains("stop loss") || lower.contains("safety exit");
-    let is_win = pnl_pct > 0.0
-        && (lower.contains("trailing")
-            || lower.contains("take-profit")
-            || lower.contains("take profit"));
-    if !is_risk_cut && !is_win {
-        return;
-    }
+    // Every close is pushed, not only the dramatic ones. Filtering to stop-losses
+    // and take-profits left the quiet exits — out-of-range, low yield — invisible,
+    // and those are the majority: a chat showing opens with no matching close
+    // reads as positions that never ended.
 
     let pool = pos.pool_name.as_deref().unwrap_or("unknown");
     let fees = pos.all_time_fees_usd.unwrap_or(0.0);
@@ -277,16 +274,30 @@ async fn notify_close_to_telegram(
     // render literally. send_message_safe falls back to plain text if a pool
     // name ever contains characters Markdown chokes on, so the message still
     // arrives — unformatted rather than not at all.
+    // The marker follows the result, not the rule that fired. Keying it on
+    // "was this a stop-loss" put a green tick on losing out-of-range exits,
+    // which are now the majority of what gets pushed.
+    let marker = if is_risk_cut {
+        "\u{1F6D1}"
+    } else if pnl_pct > 0.0 {
+        "\u{2705}"
+    } else {
+        "\u{26AA}"
+    };
+    // No Net line. pnl already contains the fees, which Meteora's own numbers
+    // settle: deposit $36.91, withdraw $33.20, fees $1.42, reported PnL -$2.30 —
+    // exactly -3.71 + 1.42. Adding them was double-counting, and it is what made
+    // a session read as +$40 while the wallet moved about $2. The fee figure
+    // stays because it is worth seeing, labelled as already included.
     let text = format!(
-        "{} *{}*\n_{}_\n\nPnL: *{:+.2}%*  ({:+.4} SOL · {:+.2} USD)\nFees: +{:.2} USD\n\n*Net: {:+.2} USD*",
-        if is_risk_cut { "🛑" } else { "✅" },
+        "{} *{}*\n_{}_\n\nPnL: *{:+.2}%*  ({:+.4} SOL \u{00B7} {:+.2} USD)\nFees: {:.2} USD _(sudah di PnL)_",
+        marker,
         pool,
         reason,
         pnl_pct,
         pos.pnl_sol.unwrap_or(0.0),
         pnl_usd,
         fees,
-        pnl_usd + fees,
     );
     let _ = tools::telegram::send_message_safe(token, chat_id, &text).await;
 }
