@@ -225,39 +225,43 @@ def build(d, hist, stale):
         )
     lay["profit"].update(Panel(Group(*lines), border_style="yellow"))
 
-    # ── positions: two lines per card, so five slots always fit ──
-    # Three-line cards with blank separators overflowed the panel and
-    # swallowed positions past the second. Modal is dropped from the card —
-    # it is a constant 0.50 and already represented in the exposure bar.
+    # ── positions: two fixed-width lines per card ────────────────
+    # Every field sits in a fixed column so the cards read as one table:
+    # variable-width composition strings were pushing "nilai" to a different
+    # x-position on every row, which is what made the panel look scattered.
     cards = []
     for p in d["open"]:
-        head_line = Text(" ")
-        head_line.append(f"{p['pool'][:16]:<16}", style="bold white")
         in_range = p.get("in_range")
         if in_range is None:
             in_range = p.get("status") == "active"
-        head_line.append("● " if in_range else "○ ", style="green" if in_range else "yellow")
-        head_line.append_text(pnl_text(p["pnl_pct"]))
-        if p.get("peak") is not None:
-            head_line.append(f" (pk {p['peak']:+.1f})", style="dim")
+        pnl = p.get("pnl_pct")
+        peak = p.get("peak")
         fee = p.get("fee_total_usd") if p.get("fee_total_usd") is not None else p.get("fees_usd")
-        if fee is not None:
-            head_line.append("  fee ", style="dim")
-            head_line.append(f"${fee:.2f}", style="green")
-        head_line.append(f"  {fmt_age(p['age_min'])}", style="dim")
+
+        head_line = Text(" ")
+        head_line.append(f"{p['pool'][:15]:<15}", style="bold white")
+        head_line.append("● " if in_range else "○ ", style="green" if in_range else "yellow")
+        pnl_s = f"{pnl:+.2f}%" if pnl is not None else "-"
+        head_line.append(
+            f"{pnl_s:>8}",
+            style="green" if (pnl or 0) > 0 else "red" if (pnl or 0) < 0 else "dim",
+        )
+        head_line.append(f"{('(pk ' + format(peak, '+.1f') + ')') if peak is not None else '':>11}", style="dim")
+        head_line.append("  fee ", style="dim")
+        head_line.append(f"{('$' + format(fee, '.2f')) if fee is not None else '-':>6}", style="green")
+        head_line.append(f"{fmt_age(p['age_min']):>6}", style="dim")
         cards.append(head_line)
 
         base_sym = p["pool"].rsplit("-", 1)[0]
-        row = Text("   isi ", style="dim")
         if p.get("tok_amount") is not None and p.get("sol_amount") is not None:
             tok = p["tok_amount"]
             tok_s = f"{tok / 1e6:.2f}jt" if tok >= 1e6 else f"{tok / 1e3:.1f}k" if tok >= 1e3 else f"{tok:.0f}"
-            row.append(f"{tok_s} {base_sym[:9]}", style="magenta")
-            row.append(" + ", style="dim")
-            row.append(f"{p['sol_amount']:.3f}◎", style="cyan")
+            isi = f"{tok_s} {base_sym[:9]} + {p['sol_amount']:.3f}◎"
         else:
-            row.append("-", style="dim")
-        row.append("  nilai ", style="dim")
+            isi = "-"
+        row = Text("   isi ", style="dim")
+        row.append(f"{isi:<26}", style="cyan")
+        row.append("nilai ", style="dim")
         if p.get("value_sol") is not None:
             row.append(f"{p['value_sol']:.4f}◎", style="bold")
             if p.get("value_usd") is not None:
