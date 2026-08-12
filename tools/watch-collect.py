@@ -216,7 +216,10 @@ except Exception:
 # ── log health ───────────────────────────────────────────────────
 recent = tail(LOG_OUT, 400) + tail(LOG_ERR, 200)
 out["health"] = {
-    "err_429": recent.count("429"),
+    # Count the literal rate-limit message, not the bare substring: "429"
+    # matches inside timestamps and signatures (T09:42:18.484291Z), which made
+    # a healthy RPC read as throttled on the dashboard.
+    "err_429": recent.count("Too Many Requests") + recent.count("max usage"),
     "rpc_fail": len(re.findall(r"health check failed", recent)),
     "errors": len(re.findall(r"ERROR", recent)),
     "impact_rejects": len(re.findall(r"exit price impact .* above max", recent)),
