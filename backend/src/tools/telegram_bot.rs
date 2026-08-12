@@ -683,10 +683,14 @@ async fn fmt_positions_cards(config: &Config, state_path: &str) -> String {
             })
             .unwrap_or_else(|_| "-".to_string());
 
-        out.push_str(&format!("\n\n*{name}*  {status}  {pnl}"));
+        // The card body goes in a code block: Telegram renders messages in a
+        // proportional font, so plain-text label columns never line up — the
+        // same lesson /pnl already learned. The header stays outside the fence
+        // to keep the bold name and the status emoji.
+        let mut body = String::new();
         if let Some((val_sol, tok, sol_side, fee_usd)) = comp.get(&p.id) {
             if let Some(v) = val_sol {
-                out.push_str(&format!("\nnilai  {v:.4}\u{25ce}"));
+                body.push_str(&format!("nilai  {v:.4}\u{25ce}\n"));
             }
             if let (Some(t), Some(sl)) = (tok, sol_side) {
                 let tok_s = if *t >= 1e6 {
@@ -696,17 +700,17 @@ async fn fmt_positions_cards(config: &Config, state_path: &str) -> String {
                 } else {
                     format!("{t:.0}")
                 };
-                out.push_str(&format!("\nisi    {tok_s} {base_sym} + {sl:.3}\u{25ce}"));
+                body.push_str(&format!("isi    {tok_s} {base_sym} + {sl:.3}\u{25ce}\n"));
             }
             if let Some(f) = fee_usd.or(p.all_time_fees_usd) {
-                out.push_str(&format!("\nfee    ${f:.2}"));
+                body.push_str(&format!("fee    ${f:.2}\n"));
             }
         } else if let Some(f) = p.all_time_fees_usd {
-            out.push_str(&format!("\nfee    ${f:.2}"));
+            body.push_str(&format!("fee    ${f:.2}\n"));
         }
+        body.push_str(&format!("modal  {:.2}\u{25ce}  umur {age}", p.amount_sol));
         out.push_str(&format!(
-            "\nmodal  {:.2}\u{25ce} \u{00b7} umur {age}",
-            p.amount_sol
+            "\n\n*{name}*  {status}  {pnl}\n```\n{body}\n```"
         ));
     }
     out
