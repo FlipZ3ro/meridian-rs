@@ -103,16 +103,18 @@ def build(d, hist, stale):
     lay = Layout()
     lay.split_column(
         Layout(name="head", size=1),
-        Layout(name="profit", size=7),
+        Layout(name="profit", size=8),
         Layout(name="mid", ratio=2),
         Layout(name="log", size=11),
         Layout(name="foot", size=1),
     )
     lay["mid"].split_row(Layout(name="pos", ratio=3), Layout(name="side", ratio=2))
+    # Proportional, not fixed: fixed heights on a short terminal cut one panel
+    # mid-border and pushed the next off-screen entirely. Ratios shrink both
+    # gracefully instead.
     lay["side"].split_column(
-        Layout(name="risk", size=8),
-        Layout(name="trend", size=5),
-        Layout(name="sys", ratio=1),
+        Layout(name="risk", ratio=3),
+        Layout(name="sys", ratio=2),
     )
 
     # ── header ───────────────────────────────────────────────────
@@ -149,24 +151,35 @@ def build(d, hist, stale):
         )
     lc = d.get("last_close")
     if lc:
-        t = Text("last close  ")
+        t = Text("last close ", style="dim")
         t.append(lc["pool"], style="bold")
-        t.append("  ")
+        t.append(" ")
         t.append_text(pnl_text(lc["pnl_pct"]))
-        t.append(f"  ({fmt_age(lc['ago_min'])} lalu)", style="dim")
+        t.append(f" ({fmt_age(lc['ago_min'])} lalu)", style="dim")
         lines.append(Align.center(t))
     win = d["window"]
     wr = win["wins"] * 100 // win["closes"] if win["closes"] else 0
     stats = Text()
-    stats.append(f"24j PnL ", style="dim")
+    stats.append("24j ", style="dim")
     stats.append_text(pnl_text(win["pnl_sol"], " SOL"))
-    stats.append(f"    trades {win['wins']}/{win['closes']} ", style="bold")
+    stats.append("  ·  ", style="grey30")
+    stats.append(f"{win['wins']}/{win['closes']} ", style="bold")
     stats.append(f"({wr}%)", style="green" if wr >= 60 else "yellow")
-    stats.append(f"    best ", style="dim")
-    stats.append_text(pnl_text(win["best_sol"], " SOL"))
-    stats.append(f"    worst ", style="dim")
-    stats.append_text(pnl_text(win["worst_sol"], " SOL"))
+    stats.append("  ·  best ", style="dim")
+    stats.append_text(pnl_text(win["best_sol"], ""))
+    stats.append("  ·  worst ", style="dim")
+    stats.append_text(pnl_text(win["worst_sol"], ""))
     lines.append(Align.center(stats))
+    # The equity sparkline lives here, with the number it explains, instead of
+    # in a side panel that kept falling off the bottom of short terminals.
+    vals = [h["v"] for h in hist]
+    if len(vals) >= 2:
+        lines.append(Align.center(Text(sparkline(vals, 44), style="cyan")))
+        lines.append(
+            Align.center(
+                Text(f"{vals[0]:.3f} → {vals[-1]:.3f} SOL", style="dim")
+            )
+        )
     lay["profit"].update(Panel(Group(*lines), border_style="yellow"))
 
     # ── positions ────────────────────────────────────────────────
@@ -206,17 +219,6 @@ def build(d, hist, stale):
             risk.append(t)
     lay["risk"].update(Panel(Group(*risk), title="RISK", border_style="magenta"))
 
-    # ── trend ────────────────────────────────────────────────────
-    vals = [h["v"] for h in hist]
-    trend = Group(
-        Text(sparkline(vals, 34), style="cyan"),
-        Text(
-            f"{vals[0]:.3f} → {vals[-1]:.3f} SOL ({len(vals)} titik)" if len(vals) >= 2 else "mengumpulkan data…",
-            style="dim",
-        ),
-    )
-    lay["trend"].update(Panel(trend, title="EQUITY TREND", border_style="blue"))
-
     # ── system ───────────────────────────────────────────────────
     h, dr = d["health"], d["drift"]
     sys_lines = [
@@ -247,7 +249,7 @@ def build(d, hist, stale):
             t.append(f"{mark} CLOSE ", style="green" if (pnl or 0) > 0 else "red" if (pnl or 0) < 0 else "dim")
             t.append(f"{e['pool']:<14}", style="bold")
             t.append_text(pnl_text(pnl))
-            t.append(f"  {e.get('reason', '')}", style="dim")
+            t.append(f"  {e.get('reason', '')[:34]}", style="dim")
         ev_lines.append(t)
     if not ev_lines:
         ev_lines.append(Text(" (belum ada event 12 jam terakhir)", style="dim"))
@@ -260,6 +262,16 @@ def build(d, hist, stale):
 
 
 def main():
+    # A legacy Windows console (or a pipe) defaults to cp1252, which cannot
+    # encode the glyphs this dashboard is made of and kills the process with a
+    # UnicodeEncodeError. Force UTF-8 with replacement so the worst case is an
+    # ugly character, never a crash.
+    if sys.platform == "win32":
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError):
+            pass
+
     once = "--once" in sys.argv
     console = Console()
     hist = load_history()
