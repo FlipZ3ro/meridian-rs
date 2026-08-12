@@ -15,7 +15,7 @@ import subprocess
 import sys
 import time
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from rich.align import Align
@@ -93,6 +93,18 @@ def sparkline(values, width):
     return "".join(SPARK[int((v - lo) / (hi - lo) * (len(SPARK) - 1))] for v in vals)
 
 
+WIB = timezone(timedelta(hours=7))
+
+
+def wib_hhmm(iso):
+    """UTC ISO stamp -> HH:MM in WIB. Falls back to the raw slice on parse
+    failure rather than showing nothing."""
+    try:
+        return datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(WIB).strftime("%H:%M")
+    except (ValueError, AttributeError):
+        return (iso or "")[11:16]
+
+
 def _span_hours(hist):
     try:
         a = datetime.fromisoformat(hist[0]["t"])
@@ -158,7 +170,7 @@ def build(d, hist, stale):
     head_l.split_row(
         Layout(Align.left(head)),
         Layout(Align.center(Text(title, style="bold yellow" if not stale else "bold red"))),
-        Layout(Align.right(Text(datetime.now(timezone.utc).strftime("UTC %H:%M:%S "), style="cyan"))),
+        Layout(Align.right(Text(datetime.now(WIB).strftime("WIB %H:%M:%S "), style="cyan"))),
     )
     lay["head"].update(head_l)
 
@@ -268,7 +280,7 @@ def build(d, hist, stale):
     # ── event log ────────────────────────────────────────────────
     ev_lines = []
     for e in d["events"]:
-        hhmm = e["t"][11:16]
+        hhmm = wib_hhmm(e["t"])
         if e["kind"] == "open":
             t = Text(f" {hhmm} ", style="dim")
             t.append("▲ OPEN  ", style="cyan")
