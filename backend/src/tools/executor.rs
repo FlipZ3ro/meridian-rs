@@ -108,6 +108,20 @@ async fn should_bank_fees(result: &Value, config: &Config) -> bool {
 /// name through as free text (e.g. "auto-close (pnl_poll): stop loss"). These
 /// always deserve a re-entry cooldown regardless of whether a pnl figure was
 /// available at close time.
+/// Same-token pause after ANY close, wins included, in minutes.
+///
+/// Re-entering a token it just left is the single most consistent way this bot
+/// loses money, and the result barely depends on how the previous position
+/// went. Across 159 re-entries: under 30 minutes averaged -0.17%, 30-60
+/// minutes -0.82%, one to four hours -0.47% — every bucket negative BEFORE the
+/// ~1.5% round-trip cost, and re-entries after wins fared no better (-0.19%
+/// over 93). Past four hours the average turns positive (+0.17% over 80), and
+/// a first touch of a token averages +0.81%. Four hours is where the data puts
+/// the line, and it matches the repeat-loss lock, which stays as the guard for
+/// the losing case. COGE is the shape this prevents: banked +2.98%, re-entered
+/// eleven minutes later, flushed to -27.5%.
+const REENTRY_PAUSE_MIN: u32 = 240;
+
 fn is_risk_cut_reason(reason: &str) -> bool {
     let reason = reason.to_ascii_lowercase();
     reason.contains("stop loss")
@@ -1287,6 +1301,15 @@ impl ToolExecutor {
                             ),
                         );
                     }
+
+                    // Universal re-entry pause, independent of the outcome.
+                    // Cooldowns only ever extend, so on a losing close this and
+                    // the loss cooldown simply resolve to whichever is longer.
+                    pool_memory.set_cooldown(
+                        &pos.base_mint,
+                        "re-entry pause (post-close)",
+                        REENTRY_PAUSE_MIN,
+                    );
                 }
 
                 // Auto-swap base token back to SOL after close
