@@ -23,3 +23,4 @@ frontend-dev.log
 dev-combined.log
 dev-combined.err.log
 frontend-dev.err.log
+tools/watch-history.jsonl
