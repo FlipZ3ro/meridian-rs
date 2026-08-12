@@ -601,13 +601,42 @@ impl ToolExecutor {
                     );
                 }
 
-                // Duplicate pool check
+                // Duplicate pool check — state first, then the chain.
+                //
+                // Tracked state alone is not enough, because a deploy can land
+                // on-chain while reporting failure: the send times out, the
+                // executor treats it as failed, and nothing is recorded. The
+                // next attempt sees no tracked position and goes again. That is
+                // how STONK-SOL ended up with two positions in one pool — three
+                // pre-flights passed for the same pool inside seven minutes, one
+                // of them landed unrecorded, and reconcile adopted the orphan
+                // forty minutes later. With 318 deploys reporting failure in a
+                // day, however few of those actually landed, the hole is wide.
+                //
+                // Asking the chain costs one call per deploy attempt and closes
+                // it regardless of why the state is behind. If the lookup itself
+                // fails the deploy proceeds — an unreachable RPC is not evidence
+                // that a position exists.
                 let active = positions.get_active();
                 if active.iter().any(|p| p.pool_address == pool_addr) {
                     anyhow::bail!(
                         "already have position in pool {}",
                         &pool_addr[..12.min(pool_addr.len())]
                     );
+                }
+
+                if let Ok(on_chain) =
+                    crate::tools::meteora_native::discover_wallet_positions(config).await
+                {
+                    if let Some((orphan, _)) =
+                        on_chain.iter().find(|(_, lb_pair)| lb_pair == pool_addr)
+                    {
+                        anyhow::bail!(
+                            "pool {} already holds an on-chain position ({}) that state has not recorded — refusing to stack",
+                            &pool_addr[..12.min(pool_addr.len())],
+                            &orphan[..8.min(orphan.len())]
+                        );
+                    }
                 }
 
                 // Duplicate base-token check. The screener usually only passes
