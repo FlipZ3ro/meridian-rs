@@ -450,7 +450,7 @@ async fn handle(
             Ok(v) => fmt_balance(&v),
             Err(e) => format!("⚠️ {e}"),
         },
-        "positions" => fmt_state_positions(state_path),
+        "positions" => fmt_positions_cards(config, state_path).await,
         "brief" => {
             // Fetch the live balance so the brief can lead with it; a failed
             // lookup degrades to the state-only view rather than blocking.
@@ -573,23 +573,82 @@ fn fmt_balance(v: &Value) -> String {
 
 /// Open positions from the bot's TRACKED state (works for real AND dry-run,
 /// since dry-run positions never exist on-chain). Marks simulated ones with 🧪.
-fn fmt_state_positions(state_path: &str) -> String {
+/// Composition of one open position, read from Meteora's accounting: how much
+/// is still SOL and how much has converted into the token. That split is the
+/// position's real risk posture — two positions at -3% where one is 20%
+/// converted and the other 80% are different trades — and local state does not
+/// carry it. Fetched per pool at command time; a failed call just omits the
+/// lines it would have filled.
+async fn position_composition(
+    pool: &str,
+    wallet: &str,
+) -> std::collections::HashMap<String, (Option<f64>, Option<f64>, Option<f64>, Option<f64>)> {
+    let mut out = std::collections::HashMap::new();
+    let url = format!(
+        "https://dlmm.datapi.meteora.ag/positions/{pool}/pnl?user={wallet}&status=open&pageSize=100&page=1"
+    );
+    let Ok(resp) = reqwest::Client::new()
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(8))
+        .send()
+        .await
+    else {
+        return out;
+    };
+    let Ok(v) = resp.json::<Value>().await else {
+        return out;
+    };
+    let num = |x: Option<&Value>| -> Option<f64> {
+        x.and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+    };
+    let empty = Vec::new();
+    for m in v.get("positions").and_then(Value::as_array).unwrap_or(&empty) {
+        let Some(id) = m.get("positionAddress").and_then(Value::as_str) else {
+            continue;
+        };
+        let u = m.get("unrealizedPnl");
+        out.insert(
+            id.to_string(),
+            (
+                num(u.and_then(|x| x.pointer("/balancesSol"))),
+                num(u.and_then(|x| x.pointer("/balanceTokenX/amount"))),
+                num(u.and_then(|x| x.pointer("/balanceTokenY/amount"))),
+                num(m.pointer("/allTimeFees/total/usd")),
+            ),
+        );
+    }
+    out
+}
+
+async fn fmt_positions_cards(config: &Config, state_path: &str) -> String {
     use crate::state::positions::{PositionState, PositionStatus};
+    let _ = config;
     let state = match PositionState::load(state_path) {
         Ok(s) => s,
-        Err(e) => return format!("⚠️ could not read state: {e}"),
+        Err(e) => return format!("\u{26a0} could not read state: {e}"),
     };
     let active = state.get_active();
     if active.is_empty() {
-        return "📊 No open positions.".to_string();
+        return "\u{1f4ca} No open positions.".to_string();
     }
-    // Totals first: on a phone the portfolio answer matters more than any
-    // single row, and fees are shown alongside PnL because they routinely
-    // cover most of a loss — PnL alone reads worse than the position is.
-    let total_pnl: f64 = active.iter().filter_map(|p| p.pnl_sol).sum::<f64>() + 0.0;
-    let total_fees: f64 = active.iter().filter_map(|p| p.all_time_fees_usd).sum::<f64>() + 0.0;
+    let wallet = crate::tools::meteora_native::wallet_secret_from_env()
+        .ok()
+        .and_then(|s| crate::tools::meteora_native::keypair_pubkey_from_secret(&s).ok())
+        .unwrap_or_default();
+
+    let mut comp = std::collections::HashMap::new();
+    if !wallet.is_empty() {
+        let pools: std::collections::HashSet<String> =
+            active.iter().map(|p| p.pool_address.clone()).collect();
+        for pool in pools {
+            comp.extend(position_composition(&pool, &wallet).await);
+        }
+    }
+
+    let total_pnl: f64 = active.iter().filter_map(|p| p.pnl_sol).sum();
+    let total_fees: f64 = active.iter().filter_map(|p| p.all_time_fees_usd).sum();
     let mut out = format!(
-        "📊 Open positions ({})\n◎{:+.4} SOL · fees ${:.2}",
+        "\u{1f4ca} Open positions ({})\n\u{25ce}{:+.4} SOL \u{00b7} fees ${:.2}",
         active.len(),
         total_pnl,
         total_fees
@@ -601,29 +660,52 @@ fn fmt_state_positions(state_path: &str) -> String {
             .clone()
             .or_else(|| p.base_symbol.clone())
             .unwrap_or_else(|| "?".to_string());
-        let dry = if p.id.starts_with("dryrun-") { " 🧪" } else { "" };
+        let base_sym = name.rsplit_once('-').map(|(b, _)| b).unwrap_or(&name).to_string();
         let status = match p.status {
-            PositionStatus::Active => "in-range",
-            PositionStatus::OutOfRange => "⚠️ out-of-range",
+            PositionStatus::Active => "\u{1f7e2} in-range",
+            PositionStatus::OutOfRange => "\u{1f7e1} out-of-range",
             PositionStatus::Closed => "closed",
         };
-        // A position that has never been polled has no PnL yet; say so rather
-        // than printing a misleading 0.00%.
         let pnl = match p.pnl_pct {
-            Some(pct) => {
-                let mark = if pct >= 0.0 { "🟢" } else { "🔴" };
-                format!("{mark} {pct:+.2}%")
+            Some(pct) => format!("{pct:+.2}%"),
+            None => "\u{23f3}".to_string(),
+        };
+        let age = chrono::DateTime::parse_from_rfc3339(&p.created_at)
+            .map(|t| {
+                let m = (chrono::Utc::now() - t.with_timezone(&chrono::Utc))
+                    .num_minutes()
+                    .max(0);
+                if m >= 60 {
+                    format!("{:.1}j", m as f64 / 60.0)
+                } else {
+                    format!("{m}m")
+                }
+            })
+            .unwrap_or_else(|_| "-".to_string());
+
+        out.push_str(&format!("\n\n*{name}*  {status}  {pnl}"));
+        if let Some((val_sol, tok, sol_side, fee_usd)) = comp.get(&p.id) {
+            if let Some(v) = val_sol {
+                out.push_str(&format!("\nnilai  {v:.4}\u{25ce}"));
             }
-            None => "⏳ awaiting first poll".to_string(),
-        };
-        let fees = p.all_time_fees_usd.unwrap_or(0.0);
-        let fee_str = if fees > 0.0 {
-            format!(" · fees ${fees:.2}")
-        } else {
-            String::new()
-        };
+            if let (Some(t), Some(sl)) = (tok, sol_side) {
+                let tok_s = if *t >= 1e6 {
+                    format!("{:.2}jt", t / 1e6)
+                } else if *t >= 1e3 {
+                    format!("{:.1}k", t / 1e3)
+                } else {
+                    format!("{t:.0}")
+                };
+                out.push_str(&format!("\nisi    {tok_s} {base_sym} + {sl:.3}\u{25ce}"));
+            }
+            if let Some(f) = fee_usd.or(p.all_time_fees_usd) {
+                out.push_str(&format!("\nfee    ${f:.2}"));
+            }
+        } else if let Some(f) = p.all_time_fees_usd {
+            out.push_str(&format!("\nfee    ${f:.2}"));
+        }
         out.push_str(&format!(
-            "\n\n{name}{dry}\n  {pnl}{fee_str}\n  ◎{:.3} SOL · {status}",
+            "\nmodal  {:.2}\u{25ce} \u{00b7} umur {age}",
             p.amount_sol
         ));
     }
