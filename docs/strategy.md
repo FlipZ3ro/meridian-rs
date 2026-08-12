@@ -152,6 +152,7 @@ positive (+0.0423 SOL).
 | **Repeat-loss** | `REPEAT_LOSS_TRIGGER 2`, `REPEAT_LOSS_THRESHOLD_PCT −1.0`, `REPEAT_LOSS_COOLDOWN_HOURS 4` | Token-level, across every pool of that mint. |
 | Repeated OOR | `oorCooldownTriggerCount 4`, `oorCooldownHours 8` | For pools that keep leaving range without losing materially. |
 | Repeat deploy | `repeatDeployCooldownTriggerCount 3`, `8h` | Rotation rule for tokens that *worked*, not loss protection. |
+| **Re-entry pause** | `REENTRY_PAUSE_MIN 240`, every close | The strongest-measured rule here. Across 159 re-entries, every gap bucket under four hours lost money before costs (<30m −0.17%, 30–60m −0.82%, 1–4h −0.47%), wins included (−0.19% over 93); past four hours it turns positive and a first touch averages +0.81%. So every close pauses its token for four hours regardless of outcome. Cooldowns only extend, so on losses this simply merges with the loss locks. COGE is the shape it prevents: banked +2.98%, re-entered 11 minutes later, flushed to −27.5%. |
 
 **Trigger of 2** is measured, not chosen: across 105 closes, entries taken once
 a token already had two losing closes returned −1.64% on average over 9 tries;
