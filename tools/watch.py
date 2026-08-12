@@ -144,7 +144,7 @@ def build(d, hist, stale):
         Layout(name="head", size=1),
         Layout(name="profit", size=8),
         Layout(name="mid", ratio=2),
-        Layout(name="log", size=11),
+        Layout(name="log", size=10),
         Layout(name="foot", size=1),
     )
     lay["mid"].split_row(Layout(name="pos", ratio=3), Layout(name="side", ratio=2))
@@ -225,52 +225,46 @@ def build(d, hist, stale):
         )
     lay["profit"].update(Panel(Group(*lines), border_style="yellow"))
 
-    # ── positions: one card per position, composition included ───
+    # ── positions: two lines per card, so five slots always fit ──
+    # Three-line cards with blank separators overflowed the panel and
+    # swallowed positions past the second. Modal is dropped from the card —
+    # it is a constant 0.50 and already represented in the exposure bar.
     cards = []
     for p in d["open"]:
-        if cards:
-            cards.append(Text(""))
         head_line = Text(" ")
-        head_line.append(p["pool"], style="bold white")
+        head_line.append(f"{p['pool'][:16]:<16}", style="bold white")
         in_range = p.get("in_range")
         if in_range is None:
             in_range = p.get("status") == "active"
-        head_line.append("  ")
-        head_line.append("● IN RANGE" if in_range else "○ OOR", style="green" if in_range else "yellow")
-        head_line.append("  ")
+        head_line.append("● " if in_range else "○ ", style="green" if in_range else "yellow")
         head_line.append_text(pnl_text(p["pnl_pct"]))
         if p.get("peak") is not None:
-            head_line.append(f" (pk {p['peak']:+.1f}%)", style="dim")
+            head_line.append(f" (pk {p['peak']:+.1f})", style="dim")
+        fee = p.get("fee_total_usd") if p.get("fee_total_usd") is not None else p.get("fees_usd")
+        if fee is not None:
+            head_line.append("  fee ", style="dim")
+            head_line.append(f"${fee:.2f}", style="green")
+        head_line.append(f"  {fmt_age(p['age_min'])}", style="dim")
         cards.append(head_line)
 
         base_sym = p["pool"].rsplit("-", 1)[0]
-        row = Text("   nilai ", style="dim")
+        row = Text("   isi ", style="dim")
+        if p.get("tok_amount") is not None and p.get("sol_amount") is not None:
+            tok = p["tok_amount"]
+            tok_s = f"{tok / 1e6:.2f}jt" if tok >= 1e6 else f"{tok / 1e3:.1f}k" if tok >= 1e3 else f"{tok:.0f}"
+            row.append(f"{tok_s} {base_sym[:9]}", style="magenta")
+            row.append(" + ", style="dim")
+            row.append(f"{p['sol_amount']:.3f}◎", style="cyan")
+        else:
+            row.append("-", style="dim")
+        row.append("  nilai ", style="dim")
         if p.get("value_sol") is not None:
             row.append(f"{p['value_sol']:.4f}◎", style="bold")
             if p.get("value_usd") is not None:
                 row.append(f" ${p['value_usd']:.1f}", style="dim")
         else:
             row.append("-", style="dim")
-        row.append("  modal ", style="dim")
-        dep = p.get("deposit_sol")
-        row.append(f"{dep:.2f}◎" if dep is not None else "-")
-        row.append("  umur ", style="dim")
-        row.append(fmt_age(p["age_min"]))
         cards.append(row)
-
-        row2 = Text("   isi ", style="dim")
-        if p.get("tok_amount") is not None and p.get("sol_amount") is not None:
-            tok = p["tok_amount"]
-            tok_s = f"{tok / 1e6:.2f}jt" if tok >= 1e6 else f"{tok / 1e3:.1f}k" if tok >= 1e3 else f"{tok:.0f}"
-            row2.append(f"{tok_s} {base_sym[:9]}", style="magenta")
-            row2.append(" + ", style="dim")
-            row2.append(f"{p['sol_amount']:.3f}◎", style="cyan")
-        else:
-            row2.append("-", style="dim")
-        row2.append("  fee ", style="dim")
-        fee = p.get("fee_total_usd") if p.get("fee_total_usd") is not None else p.get("fees_usd")
-        row2.append(f"${fee:.2f}" if fee is not None else "-", style="green")
-        cards.append(row2)
     if not cards:
         cards.append(Text(" (tidak ada posisi terbuka)", style="dim"))
     lay["pos"].update(Panel(Group(*cards), title="LIVE POSITIONS", border_style="cyan"))
