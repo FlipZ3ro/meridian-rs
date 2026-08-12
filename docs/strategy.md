@@ -30,6 +30,17 @@ maximum, and nearly all memecoin pools do, so `maxBinsBelow` is effectively the
 only setting that matters. At 48 bins and bin_step 100 that covers about 38%
 below entry.
 
+**Live experiment — 30 bins, since 2026-08-12T12:55 UTC.** Neither tested width
+is known to be right: 16 bins measurably lost (a −15% dip converts 100% of the
+capital, stop-loss rate went 19%→30%), and 48 was never proven optimal — the
+stop cuts at −6%, so bins 11–48 rarely do their job and mostly thin out the fee
+share. 30 bins (~26% at bin_step 100) is the midpoint bet: 1.6× liquidity per
+bin against 48, while a −15% dip still converts only ~57%. Judge it against the
+48-bin cohort on stop-loss rate first (48-bin baseline: 19%; if 30-bin runs
+~25%+ the fast-conversion mechanism won again — revert), then fee and net per
+position, on no fewer than ~30 closes. Caveat: this overlaps the exit-impact
+filter measurement, so an improvement cannot be attributed cleanly.
+
 ---
 
 ## 2. Screening — which pools qualify
