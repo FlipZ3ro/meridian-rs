@@ -225,27 +225,55 @@ def build(d, hist, stale):
         )
     lay["profit"].update(Panel(Group(*lines), border_style="yellow"))
 
-    # ── positions ────────────────────────────────────────────────
-    tbl = Table(expand=True, header_style="bold cyan", border_style="grey30")
-    tbl.add_column("POOL")
-    tbl.add_column("STATUS")
-    tbl.add_column("PNL", justify="right")
-    tbl.add_column("PEAK", justify="right")
-    tbl.add_column("FEES $", justify="right")
-    tbl.add_column("AGE", justify="right")
+    # ── positions: one card per position, composition included ───
+    cards = []
     for p in d["open"]:
-        st = p["status"] or "-"
-        tbl.add_row(
-            Text(p["pool"], style="bold"),
-            Text(st, style="green" if st == "active" else "yellow"),
-            pnl_text(p["pnl_pct"]),
-            pnl_text(p["peak"]),
-            Text(f"{p['fees_usd']:.2f}" if p["fees_usd"] is not None else "-"),
-            Text(fmt_age(p["age_min"]), style="dim"),
-        )
-    if not d["open"]:
-        tbl.add_row(Text("(tidak ada posisi terbuka)", style="dim"), "", "", "", "", "")
-    lay["pos"].update(Panel(tbl, title="LIVE POSITIONS", border_style="cyan"))
+        if cards:
+            cards.append(Text(""))
+        head_line = Text(" ")
+        head_line.append(p["pool"], style="bold white")
+        in_range = p.get("in_range")
+        if in_range is None:
+            in_range = p.get("status") == "active"
+        head_line.append("  ")
+        head_line.append("● IN RANGE" if in_range else "○ OOR", style="green" if in_range else "yellow")
+        head_line.append("  ")
+        head_line.append_text(pnl_text(p["pnl_pct"]))
+        if p.get("peak") is not None:
+            head_line.append(f" (pk {p['peak']:+.1f}%)", style="dim")
+        cards.append(head_line)
+
+        base_sym = p["pool"].rsplit("-", 1)[0]
+        row = Text("   nilai ", style="dim")
+        if p.get("value_sol") is not None:
+            row.append(f"{p['value_sol']:.4f}◎", style="bold")
+            if p.get("value_usd") is not None:
+                row.append(f" ${p['value_usd']:.1f}", style="dim")
+        else:
+            row.append("-", style="dim")
+        row.append("  modal ", style="dim")
+        dep = p.get("deposit_sol")
+        row.append(f"{dep:.2f}◎" if dep is not None else "-")
+        row.append("  umur ", style="dim")
+        row.append(fmt_age(p["age_min"]))
+        cards.append(row)
+
+        row2 = Text("   isi ", style="dim")
+        if p.get("tok_amount") is not None and p.get("sol_amount") is not None:
+            tok = p["tok_amount"]
+            tok_s = f"{tok / 1e6:.2f}jt" if tok >= 1e6 else f"{tok / 1e3:.1f}k" if tok >= 1e3 else f"{tok:.0f}"
+            row2.append(f"{tok_s} {base_sym[:9]}", style="magenta")
+            row2.append(" + ", style="dim")
+            row2.append(f"{p['sol_amount']:.3f}◎", style="cyan")
+        else:
+            row2.append("-", style="dim")
+        row2.append("  fee ", style="dim")
+        fee = p.get("fee_total_usd") if p.get("fee_total_usd") is not None else p.get("fees_usd")
+        row2.append(f"${fee:.2f}" if fee is not None else "-", style="green")
+        cards.append(row2)
+    if not cards:
+        cards.append(Text(" (tidak ada posisi terbuka)", style="dim"))
+    lay["pos"].update(Panel(Group(*cards), title="LIVE POSITIONS", border_style="cyan"))
 
     # ── risk ─────────────────────────────────────────────────────
     risk = []
@@ -316,7 +344,9 @@ def main():
             pass
 
     once = "--once" in sys.argv
-    console = Console()
+    # A fixed frame for --once: the smoke test often runs in a short capture
+    # buffer that crops the layout and hides rendering bugs.
+    console = Console(width=110, height=46) if once else Console()
     hist = load_history()
     data, stale = None, False
 

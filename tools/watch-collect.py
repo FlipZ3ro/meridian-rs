@@ -88,6 +88,44 @@ positions = list(state.get("positions", {}).values())
 open_pos = [p for p in positions if p.get("status") != "closed"]
 closed = [p for p in positions if p.get("status") == "closed" and p.get("closed_at")]
 
+# Composition per open position, from Meteora's own accounting: how much is
+# still SOL and how much has converted into the token. That split is the
+# position's actual risk posture and nothing in local state carries it. One
+# call per distinct pool; a failed call leaves the detail fields None and the
+# dashboard falls back to the summary row.
+detail = {}
+for pool_addr in {p.get("pool_address") for p in open_pos if p.get("pool_address")}:
+    try:
+        req = urllib.request.Request(
+            f"https://dlmm.datapi.meteora.ag/positions/{pool_addr}/pnl"
+            f"?user={WALLET}&status=open&pageSize=100&page=1",
+            headers={"User-Agent": ""},
+        )
+        for m in json.loads(urllib.request.urlopen(req, timeout=8).read()).get(
+            "positions"
+        ) or []:
+            u = m.get("unrealizedPnl") or {}
+
+            def num(x):
+                # The API mixes JSON numbers and numeric strings for the same
+                # fields; normalise so the renderer can format them.
+                try:
+                    return float(x)
+                except (TypeError, ValueError):
+                    return None
+
+            detail[m.get("positionAddress")] = {
+                "value_usd": num(u.get("balances")),
+                "value_sol": num(u.get("balancesSol")),
+                "tok_amount": num((u.get("balanceTokenX") or {}).get("amount")),
+                "sol_amount": num((u.get("balanceTokenY") or {}).get("amount")),
+                "fee_total_usd": num(((m.get("allTimeFees") or {}).get("total") or {}).get("usd")),
+                "deposit_sol": num(((m.get("allTimeDeposits") or {}).get("total") or {}).get("sol")),
+                "in_range": not m.get("isOutOfRange", False),
+            }
+    except Exception:
+        pass
+
 out["open"] = [
     {
         "pool": p.get("pool_name") or "?",
@@ -96,9 +134,11 @@ out["open"] = [
         "pnl_sol": p.get("pnl_sol"),
         "peak": (p.get("trailing") or {}).get("peak_pnl_pct"),
         "fees_usd": p.get("all_time_fees_usd"),
+        "bin_step": p.get("bin_step"),
         "age_min": int((now - t).total_seconds() / 60)
         if (t := ts(p.get("created_at")))
         else None,
+        **(detail.get(p.get("id")) or {}),
     }
     for p in sorted(open_pos, key=lambda p: p.get("created_at") or "")
 ]
