@@ -57,7 +57,18 @@ def load_history():
 
 
 def push_history(hist, total):
-    hist.append({"t": datetime.now(timezone.utc).isoformat(), "v": total})
+    # One point per minute at most. At the 6-second refresh cadence the
+    # history was all noise from the last few minutes, and the sparkline
+    # rendered as a solid blob of near-identical bars.
+    now = datetime.now(timezone.utc)
+    if hist:
+        try:
+            last = datetime.fromisoformat(hist[-1]["t"])
+            if (now - last).total_seconds() < 60:
+                return
+        except (ValueError, KeyError):
+            pass
+    hist.append({"t": now.isoformat(), "v": total})
     try:
         with HISTORY_FILE.open("a") as f:
             f.write(json.dumps(hist[-1]) + "\n")
@@ -68,11 +79,27 @@ def push_history(hist, total):
 def sparkline(values, width):
     if len(values) < 2:
         return "─" * width
-    vals = values[-width:]
+    # Resample the WHOLE history evenly to the display width instead of
+    # showing only the newest points, so the line spans hours of shape
+    # rather than minutes of jitter.
+    if len(values) > width:
+        step = (len(values) - 1) / (width - 1)
+        vals = [values[round(i * step)] for i in range(width)]
+    else:
+        vals = values
     lo, hi = min(vals), max(vals)
     if hi - lo < 1e-9:
         return "▄" * len(vals)
     return "".join(SPARK[int((v - lo) / (hi - lo) * (len(SPARK) - 1))] for v in vals)
+
+
+def _span_hours(hist):
+    try:
+        a = datetime.fromisoformat(hist[0]["t"])
+        b = datetime.fromisoformat(hist[-1]["t"])
+        return (b - a).total_seconds() / 3600
+    except (ValueError, KeyError, IndexError):
+        return 0.0
 
 
 def fmt_age(minutes):
@@ -177,7 +204,11 @@ def build(d, hist, stale):
         lines.append(Align.center(Text(sparkline(vals, 44), style="cyan")))
         lines.append(
             Align.center(
-                Text(f"{vals[0]:.3f} → {vals[-1]:.3f} SOL", style="dim")
+                Text(
+                    f"{vals[0]:.3f} → {vals[-1]:.3f} SOL"
+                    + (f"  ·  {span:.1f}j" if (span := _span_hours(hist)) >= 0.1 else ""),
+                    style="dim",
+                )
             )
         )
     lay["profit"].update(Panel(Group(*lines), border_style="yellow"))
